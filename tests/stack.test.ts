@@ -1145,6 +1145,50 @@ describe("StackGraph", () => {
   });
 });
 
+describe("Git", () => {
+  it.effect("replay restores current branch and deletes temp branch after failure", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) =>
+          Effect.gen(function* () {
+            calls.push([tool, ...args]);
+            if (args[0] === "branch" && args[1] === "--show-current") {
+              return "stack-c";
+            }
+            if (args[0] === "cherry-pick" && args[1] !== "--abort") {
+              return yield* Effect.fail(new ExecError(tool, args, 1, "conflict"));
+            }
+            return "";
+          }),
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const git = yield* Git.Service;
+
+      const error = yield* Effect.flip(git.replay("stack-b", "dev", ["b1"]));
+
+      expect(error).toBeInstanceOf(ExecError);
+      const temp = calls[1]?.[3];
+      expect(temp).toMatch(/^stack\/replay-\d+-stack-b$/);
+      expect(calls).toEqual([
+        ["git", "branch", "--show-current"],
+        ["git", "checkout", "-B", temp, "dev"],
+        ["git", "cherry-pick", "--empty=drop", "b1"],
+        ["git", "cherry-pick", "--abort"],
+        ["git", "checkout", "stack-c"],
+        ["git", "branch", "-D", temp],
+      ]);
+    }).pipe(
+      Effect.provide(
+        Git.live.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc)),
+      ),
+    );
+  });
+});
+
 describe("Stack", () => {
   it.effect("status uses local stack metadata without inferring from GitHub", () =>
     Effect.gen(function* () {

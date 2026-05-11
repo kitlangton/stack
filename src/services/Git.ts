@@ -149,17 +149,36 @@ export const live = Layer.effect(
       ) {
         const current = yield* run("git", ["branch", "--show-current"]);
         const temp = `stack/replay-${Date.now()}-${branch.replaceAll("/", "-")}`;
+        const abortCherryPick = run("git", ["cherry-pick", "--abort"], [
+          0,
+          1,
+          128,
+        ]).pipe(Effect.asVoid, Effect.orDie);
+        const deleteTemp = run("git", ["branch", "-D", temp], [0, 1]).pipe(
+          Effect.asVoid,
+          Effect.orDie,
+        );
+        const restoreCurrent = current
+          ? run("git", ["checkout", current]).pipe(Effect.asVoid, Effect.orDie)
+          : Effect.void;
 
-        yield* run("git", ["checkout", "-B", temp, parent]).pipe(Effect.asVoid);
-        if (commits.length > 0) {
-          yield* run("git", ["cherry-pick", "--empty=drop", ...commits]).pipe(
+        yield* Effect.gen(function* () {
+          yield* run("git", ["checkout", "-B", temp, parent]).pipe(
             Effect.asVoid,
           );
-        }
-        yield* run("git", ["branch", "-f", branch, temp]).pipe(Effect.asVoid);
-        if (current)
-          yield* run("git", ["checkout", current]).pipe(Effect.asVoid);
-        yield* run("git", ["branch", "-D", temp], [0, 1]).pipe(Effect.asVoid);
+          if (commits.length > 0) {
+            yield* run("git", ["cherry-pick", "--empty=drop", ...commits]).pipe(
+              Effect.asVoid,
+            );
+          }
+          yield* run("git", ["branch", "-f", branch, temp]).pipe(Effect.asVoid);
+        }).pipe(
+          Effect.ensuring(
+            abortCherryPick.pipe(
+              Effect.ensuring(restoreCurrent.pipe(Effect.ensuring(deleteTemp))),
+            ),
+          ),
+        );
       });
       const backup = Effect.fn("Git.backup")((branch: string, name: string) =>
         run("git", ["branch", "-f", name, branch]).pipe(Effect.asVoid),

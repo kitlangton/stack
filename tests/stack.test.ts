@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Layer, Option, Ref } from "effect";
+import { Effect, Fiber, Layer, Option, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1186,6 +1186,52 @@ describe("Git", () => {
     }).pipe(
       Effect.provide(
         Git.live.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc)),
+      ),
+    );
+  });
+});
+
+describe("GitHub", () => {
+  it.effect("wait polls with the configured interval", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    let views = 0;
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) =>
+          Effect.sync(() => {
+            calls.push([tool, ...args]);
+            views += 1;
+            return JSON.stringify({
+              state: "OPEN",
+              mergedAt: views === 1 ? null : "2026-01-01T00:00:00Z",
+            });
+          }),
+      }),
+    );
+    const cfgLayer = StackConfig.layer({
+      root: "/tmp/stack",
+      trunks: ["dev"],
+      githubWaitIntervalMillis: 1_000,
+    }).pipe(Layer.provide(NodeServices.layer));
+
+    return Effect.gen(function* () {
+      const github = yield* GitHub.Service;
+      const fiber = yield* github.wait(4).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Effect.yieldNow;
+      expect(calls).toHaveLength(1);
+
+      yield* TestClock.adjust("999 millis");
+      expect(calls).toHaveLength(1);
+
+      yield* TestClock.adjust("1 millis");
+      yield* Fiber.join(fiber);
+      expect(calls).toHaveLength(2);
+    }).pipe(
+      Effect.provide(
+        GitHub.layer.pipe(Layer.provideMerge(cfgLayer), Layer.provideMerge(proc)),
       ),
     );
   });

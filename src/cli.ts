@@ -67,10 +67,6 @@ const guide = `Happy path for stacked PRs
 3. Apply only after the preview looks right.
    stack sync
 
-Use stack track only when PR bases do not already encode the stack, or when you
-need to correct explicit local stack metadata. Do not run track defensively for a
-normal stack whose PR bases are already right.
-
 Use stack status to verify the relevant local tracked stack. It does not call
 GitHub, hides backup branches, and focuses on the current stack instead of
 listing every local branch.`;

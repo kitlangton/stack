@@ -39,6 +39,7 @@ export interface Interface {
 
 class PullData extends Schema.Class<PullData>("PullData")({
   number: Schema.Number,
+  title: Schema.String,
   headRefName: Schema.String,
   baseRefName: Schema.String,
   url: Schema.String,
@@ -94,6 +95,7 @@ const decodePullData = (args: ReadonlyArray<string>, out: string) =>
 const ref = (row: PullData) =>
   pullRef({
     number: row.number,
+    title: row.title,
     head: row.headRefName,
     base: row.baseRefName,
     url: row.url,
@@ -113,156 +115,284 @@ const meta = (row: PullView) =>
     labels: row.labels.map((item) => new PullLabel({ name: item.name })),
   });
 
-export class Service extends Context.Service<Service, Interface>()(
-  "@stack/GitHub",
-) {}
+export class Service extends Context.Service<Service, Interface>()("@stack/GitHub") {}
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-      const cfg = yield* StackConfig;
-      const proc = yield* Proc.Service;
+    const cfg = yield* StackConfig;
+    const proc = yield* Proc.Service;
 
-      const run = Effect.fn("GitHub.run")(function* (
-        args: ReadonlyArray<string>,
-        ok: ReadonlyArray<number> = [0],
-      ) {
-        return yield* proc.exec(cfg.root, "gh", args, ok);
-      });
+    const run = Effect.fn("GitHub.run")(function* (
+      args: ReadonlyArray<string>,
+      ok: ReadonlyArray<number> = [0],
+    ) {
+      return yield* proc.exec(cfg.root, "gh", args, ok);
+    });
 
-      const pulls = Effect.fn("GitHub.pulls")(function* () {
-        const args = [
-          "pr",
-          "list",
-          "--state",
-          "open",
-          "--json",
-          "number,headRefName,baseRefName,url,isDraft",
-          "--limit",
-          "200",
-        ];
-        const out = yield* run(args);
+    const pulls = Effect.fn("GitHub.pulls")(function* () {
+      const args = [
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--json",
+        "number,title,headRefName,baseRefName,url,isDraft",
+        "--limit",
+        "200",
+      ];
+      const out = yield* run(args);
 
-        const rows = yield* decodePullList(args, out);
+      const rows = yield* decodePullList(args, out);
 
-        return rows.map(ref);
-      });
+      return rows.map(ref);
+    });
 
-      const pull = Effect.fn("GitHub.pull")((pr: number) => {
-        const args = [
-          "pr",
-          "view",
-          `${pr}`,
-          "--json",
-          "number,title,body,headRefName,baseRefName,url,isDraft,labels",
-        ];
-        return run(args).pipe(
-          Effect.flatMap((out) => decodePullView(args, out)),
-          Effect.map(meta),
-        );
-      });
-
-      const auto = Effect.fn("GitHub.auto")((pr: number) =>
-        run([
-          "pr",
-          "merge",
-          `${pr}`,
-          "--auto",
-          "--squash",
-        ]).pipe(Effect.asVoid),
+    const pull = Effect.fn("GitHub.pull")((pr: number) => {
+      const args = [
+        "pr",
+        "view",
+        `${pr}`,
+        "--json",
+        "number,title,body,headRefName,baseRefName,url,isDraft,labels",
+      ];
+      return run(args).pipe(
+        Effect.flatMap((out) => decodePullView(args, out)),
+        Effect.map(meta),
       );
+    });
 
-      const merge = Effect.fn("GitHub.merge")((
-        pr: number,
-        opts?: { readonly admin?: boolean },
-      ) =>
-        run([
-          "pr",
-          "merge",
-          `${pr}`,
-          "--squash",
-          ...(opts?.admin ? ["--admin"] : []),
-        ]).pipe(
-          Effect.asVoid,
+    const auto = Effect.fn("GitHub.auto")((pr: number) =>
+      run(["pr", "merge", `${pr}`, "--auto", "--squash"]).pipe(Effect.asVoid),
+    );
+
+    const merge = Effect.fn("GitHub.merge")((pr: number, opts?: { readonly admin?: boolean }) =>
+      run(["pr", "merge", `${pr}`, "--squash", ...(opts?.admin ? ["--admin"] : [])]).pipe(
+        Effect.asVoid,
+      ),
+    );
+
+    const wait = Effect.fn("GitHub.wait")((pr: number) =>
+      Effect.gen(function* () {
+        for (;;) {
+          const args = ["pr", "view", `${pr}`, "--json", "state,mergedAt"];
+          const out = yield* run(args);
+          const row = yield* decodePullWatch(args, out);
+
+          if (row.mergedAt) return;
+          if (row.state !== "OPEN") {
+            return yield* Effect.fail(
+              new ExecError("gh", ["pr", "view", `${pr}`], 1, `PR #${pr} closed without merging`),
+            );
+          }
+
+          yield* Effect.sleep(cfg.githubWaitIntervalMillis);
+        }
+      }),
+    );
+
+    const edit = Effect.fn("GitHub.edit")((pr: number, base: string) =>
+      run(["pr", "edit", `${pr}`, "--base", base]).pipe(Effect.asVoid),
+    );
+
+    const body = Effect.fn("GitHub.body")((pr: number, body: string) =>
+      run(["pr", "edit", `${pr}`, "--body", body]).pipe(Effect.asVoid),
+    );
+
+    const close = Effect.fn("GitHub.close")((pr: number) =>
+      run(["pr", "close", `${pr}`]).pipe(Effect.asVoid),
+    );
+
+    const create = Effect.fn("GitHub.create")(function* (
+      branch: string,
+      base: string,
+      title: string,
+      body: string,
+      labels: ReadonlyArray<string>,
+    ) {
+      yield* run([
+        "pr",
+        "create",
+        "--head",
+        branch,
+        "--base",
+        base,
+        "--title",
+        title,
+        "--body",
+        body,
+        ...labels.flatMap((label) => ["--label", label]),
+      ]);
+
+      const args = [
+        "pr",
+        "view",
+        branch,
+        "--json",
+        "number,title,headRefName,baseRefName,url,isDraft",
+      ];
+      const out = yield* run(args);
+
+      const row = yield* decodePullData(args, out);
+
+      return ref(row);
+    });
+
+    return Service.of({
+      auto,
+      merge,
+      wait,
+      pulls,
+      pull,
+      edit,
+      body,
+      close,
+      create,
+    });
+  }),
+);
+
+export const memory = (
+  opts: {
+    readonly pulls?: ReadonlyArray<PullRef>;
+    readonly metas?: ReadonlyArray<PullMeta>;
+    readonly log?: Array<string>;
+  } = {},
+) =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const pullsRef = yield* Ref.make(Array.from(opts.pulls ?? []));
+      const metasRef = yield* Ref.make(
+        new Map<number, PullMeta>((opts.metas ?? []).map((item) => [Number(item.number), item])),
+      );
+      let next = Math.max(0, ...Array.from(opts.pulls ?? [], (p) => p.number)) + 1;
+      const record = (line: string) => Effect.sync(() => opts.log?.push(line));
+
+      const pulls = Effect.fn("GitHub.memory.pulls")(() => Ref.get(pullsRef));
+      const pull = Effect.fn("GitHub.memory.pull")((pr: number) =>
+        Ref.get(metasRef).pipe(
+          Effect.flatMap((metas) => {
+            const meta = metas.get(pr);
+            if (meta) return Effect.succeed(meta);
+            return Ref.get(pullsRef).pipe(
+              Effect.flatMap((pulls) => {
+                const found = pulls.find((item) => item.number === pr);
+                return found
+                  ? Effect.succeed(
+                      pullMeta({
+                        number: found.number,
+                        title: `stack: ${found.head}`,
+                        body: "",
+                        head: found.head,
+                        base: found.base,
+                        url: found.url,
+                        draft: found.draft,
+                        state: "OPEN",
+                        labels: [],
+                      }),
+                    )
+                  : Effect.fail(new ExecError("gh", ["pr", "view", `${pr}`], 1, "not found"));
+              }),
+            );
+          }),
         ),
       );
-
-      const wait = Effect.fn("GitHub.wait")((pr: number) =>
+      const edit = Effect.fn("GitHub.memory.edit")((pr: number, base: string) =>
         Effect.gen(function* () {
-          for (;;) {
-            const args = [
-              "pr",
-              "view",
-              `${pr}`,
-              "--json",
-              "state,mergedAt",
-            ];
-            const out = yield* run(args);
-            const row = yield* decodePullWatch(args, out);
-
-            if (row.mergedAt) return;
-            if (row.state !== "OPEN") {
-              return yield* Effect.fail(
-                new ExecError(
-                  "gh",
-                  ["pr", "view", `${pr}`],
-                  1,
-                  `PR #${pr} closed without merging`,
-                ),
-              );
-            }
-
-            yield* Effect.sleep(cfg.githubWaitIntervalMillis);
-          }
+          yield* record(`edit ${pr} ${base}`);
+          yield* Ref.update(pullsRef, (pulls) =>
+            pulls.map((item) =>
+              item.number === pr
+                ? pullRef({
+                    number: item.number,
+                    title: item.title,
+                    head: item.head,
+                    base,
+                    url: item.url,
+                    draft: item.draft,
+                  })
+                : item,
+            ),
+          );
         }),
       );
-
-      const edit = Effect.fn("GitHub.edit")((pr: number, base: string) =>
-        run(["pr", "edit", `${pr}`, "--base", base]).pipe(Effect.asVoid),
+      const body = Effect.fn("GitHub.memory.body")((pr: number, body: string) =>
+        Effect.gen(function* () {
+          yield* record(`body ${pr}`);
+          yield* Ref.update(metasRef, (metas) => {
+            const nextMetas = new Map(metas);
+            const current = nextMetas.get(pr);
+            if (current) {
+              nextMetas.set(
+                pr,
+                pullMeta({
+                  number: current.number,
+                  title: current.title,
+                  body,
+                  head: current.head,
+                  base: current.base,
+                  url: current.url,
+                  draft: current.draft,
+                  state: current.state,
+                  labels: current.labels,
+                }),
+              );
+            }
+            return nextMetas;
+          });
+        }),
       );
-
-      const body = Effect.fn("GitHub.body")((pr: number, body: string) =>
-        run(["pr", "edit", `${pr}`, "--body", body]).pipe(Effect.asVoid),
-      );
-
-      const close = Effect.fn("GitHub.close")((pr: number) =>
-        run(["pr", "close", `${pr}`]).pipe(Effect.asVoid),
-      );
-
-      const create = Effect.fn("GitHub.create")(function* (
+      const create = Effect.fn("GitHub.memory.create")(function* (
         branch: string,
         base: string,
         title: string,
         body: string,
         labels: ReadonlyArray<string>,
       ) {
-        yield* run([
-          "pr",
-          "create",
-          "--head",
-          branch,
-          "--base",
-          base,
-          "--title",
+        const number = next++;
+        const made = pullRef({
+          number,
           title,
-          "--body",
-          body,
-          ...labels.flatMap((label) => ["--label", label]),
-        ]);
-
-        const args = [
-          "pr",
-          "view",
-          branch,
-          "--json",
-          "number,headRefName,baseRefName,url,isDraft",
-        ];
-        const out = yield* run(args);
-
-        const row = yield* decodePullData(args, out);
-
-        return ref(row);
+          head: branch,
+          base,
+          url: `https://example.com/${number}`,
+          draft: false,
+        });
+        yield* record(`create ${branch} ${base}`);
+        yield* Ref.update(pullsRef, (pulls) => [...pulls, made]);
+        yield* Ref.update(metasRef, (metas) =>
+          new Map(metas).set(
+            number,
+            pullMeta({
+              number,
+              title,
+              body,
+              head: branch,
+              base,
+              url: made.url,
+              draft: made.draft,
+              state: "OPEN",
+              labels: labels.map((name) => new PullLabel({ name })),
+            }),
+          ),
+        );
+        return made;
       });
+      const close = Effect.fn("GitHub.memory.close")((pr: number) =>
+        Effect.gen(function* () {
+          yield* record(`close ${pr}`);
+          yield* Ref.update(pullsRef, (pulls) => pulls.filter((item) => item.number !== pr));
+        }),
+      );
+      const merge = Effect.fn("GitHub.memory.merge")((pr: number) =>
+        Effect.gen(function* () {
+          yield* record(`merge ${pr}`);
+          yield* Ref.update(pullsRef, (pulls) => pulls.filter((item) => item.number !== pr));
+        }),
+      );
+      const auto = Effect.fn("GitHub.memory.auto")((pr: number) => record(`auto ${pr}`));
+      const wait = Effect.fn("GitHub.memory.wait")((pr: number) => record(`wait ${pr}`));
 
       return Service.of({
         auto,
@@ -275,163 +405,5 @@ export const layer = Layer.effect(
         close,
         create,
       });
-  }),
-);
-
-export const memory = (opts: {
-  readonly pulls?: ReadonlyArray<PullRef>;
-  readonly metas?: ReadonlyArray<PullMeta>;
-  readonly log?: Array<string>;
-} = {}) =>
-  Layer.effect(
-    Service,
-    Effect.gen(function* () {
-        const pullsRef = yield* Ref.make(Array.from(opts.pulls ?? []));
-        const metasRef = yield* Ref.make(
-          new Map<number, PullMeta>(
-            (opts.metas ?? []).map((item) => [Number(item.number), item]),
-          ),
-        );
-        let next = Math.max(0, ...Array.from(opts.pulls ?? [], (p) => p.number)) + 1;
-        const record = (line: string) => Effect.sync(() => opts.log?.push(line));
-
-        const pulls = Effect.fn("GitHub.memory.pulls")(() => Ref.get(pullsRef));
-        const pull = Effect.fn("GitHub.memory.pull")((pr: number) =>
-          Ref.get(metasRef).pipe(
-            Effect.flatMap((metas) => {
-              const meta = metas.get(pr);
-              if (meta) return Effect.succeed(meta);
-              return Ref.get(pullsRef).pipe(
-                Effect.flatMap((pulls) => {
-                  const found = pulls.find((item) => item.number === pr);
-                  return found
-                    ? Effect.succeed(
-                        pullMeta({
-                          number: found.number,
-                          title: `stack: ${found.head}`,
-                          body: "",
-                          head: found.head,
-                          base: found.base,
-                          url: found.url,
-                          draft: found.draft,
-                          state: "OPEN",
-                          labels: [],
-                        }),
-                      )
-                    : Effect.fail(new ExecError("gh", ["pr", "view", `${pr}`], 1, "not found"));
-                }),
-              );
-            }),
-          ),
-        );
-        const edit = Effect.fn("GitHub.memory.edit")((pr: number, base: string) =>
-          Effect.gen(function* () {
-            yield* record(`edit ${pr} ${base}`);
-            yield* Ref.update(pullsRef, (pulls) =>
-              pulls.map((item) =>
-                item.number === pr
-                  ? pullRef({
-                      number: item.number,
-                      head: item.head,
-                      base,
-                      url: item.url,
-                      draft: item.draft,
-                    })
-                  : item,
-              ),
-            );
-          }),
-        );
-        const body = Effect.fn("GitHub.memory.body")((pr: number, body: string) =>
-          Effect.gen(function* () {
-            yield* record(`body ${pr}`);
-            yield* Ref.update(metasRef, (metas) => {
-              const nextMetas = new Map(metas);
-              const current = nextMetas.get(pr);
-              if (current) {
-                nextMetas.set(
-                  pr,
-                  pullMeta({
-                    number: current.number,
-                    title: current.title,
-                    body,
-                    head: current.head,
-                    base: current.base,
-                    url: current.url,
-                    draft: current.draft,
-                    state: current.state,
-                    labels: current.labels,
-                  }),
-                );
-              }
-              return nextMetas;
-            });
-          }),
-        );
-        const create = Effect.fn("GitHub.memory.create")(function* (
-          branch: string,
-          base: string,
-          title: string,
-          body: string,
-          labels: ReadonlyArray<string>,
-        ) {
-          const number = next++;
-          const made = pullRef({
-            number,
-            head: branch,
-            base,
-            url: `https://example.com/${number}`,
-            draft: false,
-          });
-          yield* record(`create ${branch} ${base}`);
-          yield* Ref.update(pullsRef, (pulls) => [...pulls, made]);
-          yield* Ref.update(metasRef, (metas) =>
-            new Map(metas).set(
-              number,
-              pullMeta({
-                number,
-                title,
-                body,
-                head: branch,
-                base,
-                url: made.url,
-                draft: made.draft,
-                state: "OPEN",
-                labels: labels.map((name) => new PullLabel({ name })),
-              }),
-            ),
-          );
-          return made;
-        });
-        const close = Effect.fn("GitHub.memory.close")((pr: number) =>
-          Effect.gen(function* () {
-            yield* record(`close ${pr}`);
-            yield* Ref.update(pullsRef, (pulls) => pulls.filter((item) => item.number !== pr));
-          }),
-        );
-        const merge = Effect.fn("GitHub.memory.merge")((pr: number) =>
-          Effect.gen(function* () {
-            yield* record(`merge ${pr}`);
-            yield* Ref.update(pullsRef, (pulls) => pulls.filter((item) => item.number !== pr));
-          }),
-        );
-        const auto = Effect.fn("GitHub.memory.auto")((pr: number) =>
-          record(`auto ${pr}`),
-        );
-        const wait = Effect.fn("GitHub.memory.wait")((pr: number) =>
-          record(`wait ${pr}`),
-        );
-
-        return Service.of({
-          auto,
-          merge,
-          wait,
-          pulls,
-          pull,
-          edit,
-          body,
-          close,
-          create,
-        });
     }),
   );

@@ -87,16 +87,12 @@ export const treeFromStatus = (report: StatusReport): StatusTree => {
 export const make = (input: StackGraphInput): StackGraph => {
   const trunks = new Set(input.trunks.map(String));
   const names = new Set(input.refs.map((ref) => String(ref.name)));
-  const links = new Map(
-    input.state.links.map((link) => [String(link.branch), link]),
-  );
+  const links = new Map(input.state.links.map((link) => [String(link.branch), link]));
   const parents = new Map(
     input.state.links.map((link) => [String(link.branch), String(link.parent)]),
   );
   const prs = new Map(input.pulls.map((pull) => [String(pull.head), pull]));
-  const pullBases = new Map(
-    input.pulls.map((pull) => [String(pull.head), String(pull.base)]),
-  );
+  const pullBases = new Map(input.pulls.map((pull) => [String(pull.head), String(pull.base)]));
 
   const linkUrl = (pr: number | null | undefined) => {
     const url = pr ? input.prUrls?.get(pr) : null;
@@ -108,21 +104,14 @@ export const make = (input: StackGraphInput): StackGraph => {
     const link = links.get(branch) ?? null;
     const pr = prs.get(branch) ?? null;
     const hint =
-      pr &&
-      names.has(String(pr.base)) &&
-      !trunks.has(String(pr.base)) &&
-      pr.base !== ref.name
+      pr && names.has(String(pr.base)) && !trunks.has(String(pr.base)) && pr.base !== ref.name
         ? pr.base
         : null;
     const parent = link?.parent ?? hint;
     const source: Source = link ? "explicit" : parent ? "inferred" : "root";
     const errs: Array<Issue> = [];
 
-    if (
-      link &&
-      !names.has(String(link.parent)) &&
-      !trunks.has(String(link.parent))
-    ) {
+    if (link && !names.has(String(link.parent)) && !trunks.has(String(link.parent))) {
       errs.push("missing-parent");
     }
     if (!link && hint) errs.push("inferred-parent");
@@ -134,10 +123,8 @@ export const make = (input: StackGraphInput): StackGraph => {
       parent,
       anchor: link?.anchor ?? null,
       pr: pr?.number ?? link?.pr ?? null,
-      url:
-        pr?.url ??
-        linkUrl(link?.pr ? Number(link.pr) : null) ??
-        null,
+      title: pr?.title ?? null,
+      url: pr?.url ?? linkUrl(link?.pr ? Number(link.pr) : null) ?? null,
       checks: pr?.checks ?? null,
       base: pr?.base ?? null,
       draft: pr?.draft ?? false,
@@ -147,10 +134,7 @@ export const make = (input: StackGraphInput): StackGraph => {
   });
 
   const rawGraph = new Map(rawNodes.map((node) => [String(node.branch), node]));
-  const ancestors = (
-    name: string,
-    seen = new Set<string>(),
-  ): ReadonlyArray<string> => {
+  const ancestors = (name: string, seen = new Set<string>()): ReadonlyArray<string> => {
     if (seen.has(name)) return [name];
     const node = rawGraph.get(name);
     if (!node?.parent || !rawGraph.has(String(node.parent))) return [];

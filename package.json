@@ -2,37 +2,37 @@
   "name": "@kitlangton/stack",
   "version": "0.1.3",
   "description": "Squash-safe stacked PR repair CLI",
-  "type": "module",
+  "keywords": [
+    "cli",
+    "git",
+    "github",
+    "node",
+    "pull-requests",
+    "stacked-prs"
+  ],
+  "homepage": "https://github.com/kitlangton/stack#readme",
+  "bugs": {
+    "url": "https://github.com/kitlangton/stack/issues"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kitlangton/stack.git"
   },
-  "bugs": {
-    "url": "https://github.com/kitlangton/stack/issues"
+  "bin": {
+    "stack": "dist/cli.js"
   },
-  "homepage": "https://github.com/kitlangton/stack#readme",
-  "keywords": [
-    "git",
-    "github",
-    "pull-requests",
-    "stacked-prs",
-    "cli",
-    "node"
-  ],
   "files": [
     "dist",
     "skills",
     "README.md",
     "LICENSE"
   ],
+  "type": "module",
   "publishConfig": {
     "access": "public",
     "provenance": true,
     "registry": "https://registry.npmjs.org/"
-  },
-  "bin": {
-    "stack": "dist/cli.js"
   },
   "scripts": {
     "build": "bun run dev/build-cli.ts",
@@ -40,6 +40,9 @@
     "changeset:status": "npm exec --package @changesets/cli@2.31.0 -- changeset status",
     "changeset:version": "npm exec --package @changesets/cli@2.31.0 -- changeset version",
     "dev": "bun src/cli.ts status",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint",
     "package:smoke": "bun run build && npm pack --dry-run",
     "prepack": "bun run build",
     "release": "bun run package:smoke && npm exec --package @changesets/cli@2.31.0 -- changeset publish",
@@ -54,6 +57,8 @@
   "devDependencies": {
     "@effect/vitest": "4.0.0-beta.64",
     "@types/bun": "latest",
+    "oxfmt": "^0.49.0",
+    "oxlint": "^1.64.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.14"
   }

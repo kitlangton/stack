@@ -87,8 +87,7 @@ const gitAndGithub = (service: Partial<Git.Interface & GitHub.Interface>) => {
     edit: () => Effect.void,
     body: () => Effect.void,
     close: () => Effect.void,
-    create: (branch, base) =>
-      Effect.fail(unused("gh", ["pr", "create", branch, base])),
+    create: (branch, base) => Effect.fail(unused("gh", ["pr", "create", branch, base])),
   };
   const impl = { ...defaults, ...service };
 
@@ -98,14 +97,9 @@ const gitAndGithub = (service: Partial<Git.Interface & GitHub.Interface>) => {
   );
 };
 
-const refsHead = (
-  refs: ReadonlyArray<ReturnType<typeof branchRef>>,
-  name: string,
-) =>
+const refsHead = (refs: ReadonlyArray<ReturnType<typeof branchRef>>, name: string) =>
   refs.find((item) => item.name === name)?.head ??
-  (name.startsWith("origin/")
-    ? refs.find((item) => item.name === name.slice(7))?.head
-    : undefined);
+  (name.startsWith("origin/") ? refs.find((item) => item.name === name.slice(7))?.head : undefined);
 
 const stackTestLayer = (opts: {
   readonly refs: ReadonlyArray<ReturnType<typeof branchRef>>;
@@ -118,28 +112,21 @@ const stackTestLayer = (opts: {
 }) => {
   const pulls = opts.pulls ?? [];
   return Stack.layer.pipe(
-    Layer.provideMerge(
-      opts.progress ? Progress.memory(opts.progress) : Progress.noop,
-    ),
+    Layer.provideMerge(opts.progress ? Progress.memory(opts.progress) : Progress.noop),
     Layer.provideMerge(cfg),
     Layer.provideMerge(
       gitAndGithub({
         refs: () => Effect.succeed(opts.refs),
         pulls: () => Effect.succeed(pulls),
         current: () => Effect.succeed(opts.current ?? ""),
-        head: (name) =>
-          Effect.succeed(Option.fromNullishOr(refsHead(opts.refs, name))),
+        head: (name) => Effect.succeed(Option.fromNullishOr(refsHead(opts.refs, name))),
         base: (branch, parent) =>
-          Effect.succeed(
-            Option.fromNullishOr(opts.bases?.[`${branch}:${parent}`]),
-          ),
+          Effect.succeed(Option.fromNullishOr(opts.bases?.[`${branch}:${parent}`])),
         pull: (number) => {
           const pull = pulls.find((item) => item.number === number);
           return pull
             ? Effect.succeed(metaFor(pull))
-            : Effect.fail(
-                new ExecError("gh", ["pr", "view", `${number}`], 1, "not found"),
-              );
+            : Effect.fail(new ExecError("gh", ["pr", "view", `${number}`], 1, "not found"));
         },
         ...opts.service,
       }),
@@ -152,16 +139,12 @@ const tempDir = () =>
   Effect.acquireRelease(
     Effect.tryPromise(() => mkdtemp(join(tmpdir(), "stack-e2e-"))),
     (path) =>
-      Effect.tryPromise(() => rm(path, { recursive: true, force: true })).pipe(
-        Effect.orDie,
-      ),
+      Effect.tryPromise(() => rm(path, { recursive: true, force: true })).pipe(Effect.orDie),
   );
 
-const mkdirp = (path: string) =>
-  Effect.tryPromise(() => mkdir(path, { recursive: true }));
+const mkdirp = (path: string) => Effect.tryPromise(() => mkdir(path, { recursive: true }));
 
-const put = (path: string, body: string) =>
-  Effect.tryPromise(() => writeFile(path, body));
+const put = (path: string, body: string) => Effect.tryPromise(() => writeFile(path, body));
 
 const shell = (cwd: string, tool: string, args: ReadonlyArray<string>) =>
   Effect.gen(function* () {
@@ -194,8 +177,7 @@ const integrationGitHub = (opts: {
       );
       let next = Math.max(0, ...opts.pulls.map((item) => item.number)) + 1;
       const record = (item: string) => Effect.sync(() => opts.log.push(item));
-      const run = (args: ReadonlyArray<string>) =>
-        proc.exec(opts.repo, "git", args);
+      const run = (args: ReadonlyArray<string>) => proc.exec(opts.repo, "git", args);
 
       const listOpen = () => Ref.get(pulls);
       const getPull = (pr: number) =>
@@ -309,8 +291,7 @@ const integrationGitHub = (opts: {
         pull: getPull,
         edit,
         body: updateBody,
-        close: (pr) =>
-          Ref.update(pulls, (items) => items.filter((item) => item.number !== pr)),
+        close: (pr) => Ref.update(pulls, (items) => items.filter((item) => item.number !== pr)),
         create,
       });
     }),
@@ -349,9 +330,7 @@ const realStack = (opts: {
     yield* shell(repo, "git", ["config", "user.name", "Stack Test"]);
     yield* shell(repo, "git", ["remote", "add", "origin", origin]);
 
-    for (const commit of opts.base ?? [
-      { file: "base.txt", body: "base\n", message: "base" },
-    ]) {
+    for (const commit of opts.base ?? [{ file: "base.txt", body: "base\n", message: "base" }]) {
       yield* commitFile(repo, commit.file, commit.body, commit.message);
     }
     yield* shell(repo, "git", ["push", "-u", "origin", "dev"]);
@@ -496,6 +475,7 @@ const make = (state = new StackState({ version: 1, links: [] })) =>
           }),
           pullRef({
             number: 17675,
+            title: "Format stack output",
             head: "effectify-format",
             base: "effectify-env-filetime",
             url: "u5",
@@ -517,7 +497,16 @@ const makeSync = () => {
   ]);
   let pulls = [
     pullRef({
+      number: 5,
+      title: "fix+refactor(vcs): old title",
+      head: "stack-b",
+      base: "dev",
+      url: "u5",
+      draft: false,
+    }),
+    pullRef({
       number: 3,
+      title: "stack-c",
       head: "stack-c",
       base: "stack-b",
       url: "u3",
@@ -604,21 +593,16 @@ Footer
           pulls: () => Effect.succeed(pulls),
           pull: (pr: number) => Effect.succeed(metas.get(pr)!),
           current: () => Effect.succeed("stack-c"),
-          switch: (branch: string) =>
-            Effect.sync(() => void seen.push(`switch ${branch}`)),
+          switch: (branch: string) => Effect.sync(() => void seen.push(`switch ${branch}`)),
           head: (name: string) =>
             Effect.succeed(
               Option.fromNullishOr(
                 refs.get(name)?.head ??
-                  (name.startsWith("origin/")
-                    ? refs.get(name.slice(7))?.head
-                    : undefined),
+                  (name.startsWith("origin/") ? refs.get(name.slice(7))?.head : undefined),
               ),
             ),
           base: (branch: string, parent: string) =>
-            Effect.succeed(
-              Option.fromNullishOr(bases.get(`${branch}:${parent}`)),
-            ),
+            Effect.succeed(Option.fromNullishOr(bases.get(`${branch}:${parent}`))),
           commits: (branch: string, parent: string) =>
             Effect.succeed(
               parent === "origin/dev" && branch === "stack-b"
@@ -627,19 +611,17 @@ Footer
                   ? ["c1"]
                   : [],
             ),
-          novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) => Effect.succeed(commits),
+          novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) =>
+            Effect.succeed(commits),
           backup: (branch: string, name: string) =>
             Effect.sync(() => void seen.push(`backup ${branch} ${name}`)),
           drop: (branch: string) => Effect.sync(() => void seen.push(`drop ${branch}`)),
           restore: (branch: string, name: string) =>
             Effect.sync(() => void seen.push(`restore ${branch} ${name}`)),
-          replay: (branch: string, parent: string, commits: ReadonlyArray<string>) =>
+          replay: (branch: string, parent: string, _commits: ReadonlyArray<string>) =>
             Effect.sync(() => {
               seen.push(`rebase ${branch} ${parent}`);
-              refs.set(
-                branch,
-                branchRef({ name: branch, head: `${branch}-2` }),
-              );
+              refs.set(branch, branchRef({ name: branch, head: `${branch}-2` }));
               bases.set(`${branch}:${parent}`, refs.get(parent)?.head ?? "");
             }),
           push: (branch: string) => Effect.sync(() => void seen.push(`push ${branch}`)),
@@ -679,7 +661,13 @@ Footer
               );
             }),
           close: (pr: number) => Effect.sync(() => void seen.push(`close ${pr}`)),
-          create: (branch: string, base: string, title: string, body: string, labels: ReadonlyArray<string>) =>
+          create: (
+            branch: string,
+            base: string,
+            title: string,
+            body: string,
+            labels: ReadonlyArray<string>,
+          ) =>
             Effect.sync(() => {
               const pull = pullRef({
                 number: 6,
@@ -810,9 +798,7 @@ const makeLand = (
               pulls = pulls.filter((pull) => pull.number !== pr);
             }),
           wait: (pr: number) =>
-            Effect.sync(
-              () => void seen.push(`wait ${pr} ${merged ? "merged" : "open"}`),
-            ),
+            Effect.sync(() => void seen.push(`wait ${pr} ${merged ? "merged" : "open"}`)),
           refs: () => Effect.succeed(Array.from(refs.values())),
           pulls: () => Effect.succeed(pulls),
           pull: (pr: number) =>
@@ -830,21 +816,16 @@ const makeLand = (
               }),
             ),
           current: () => Effect.succeed(currentBranch),
-          switch: (branch: string) =>
-            Effect.sync(() => void seen.push(`switch ${branch}`)),
+          switch: (branch: string) => Effect.sync(() => void seen.push(`switch ${branch}`)),
           head: (name: string) =>
             Effect.succeed(
               Option.fromNullishOr(
                 refs.get(name)?.head ??
-                  (name.startsWith("origin/")
-                    ? refs.get(name.slice(7))?.head
-                    : undefined),
+                  (name.startsWith("origin/") ? refs.get(name.slice(7))?.head : undefined),
               ),
             ),
           base: (branch: string, parent: string) =>
-            Effect.succeed(
-              Option.fromNullishOr(bases.get(`${branch}:${parent}`)),
-            ),
+            Effect.succeed(Option.fromNullishOr(bases.get(`${branch}:${parent}`))),
           commits: (branch: string, parent: string) =>
             Effect.succeed(
               parent === "dev" && branch === "stack-b"
@@ -853,14 +834,12 @@ const makeLand = (
                   ? ["c1"]
                   : [],
             ),
-          novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) => Effect.succeed(commits),
+          novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) =>
+            Effect.succeed(commits),
           replay: (branch: string, parent: string, _commits: ReadonlyArray<string>) =>
             Effect.sync(() => {
               seen.push(`rebase ${branch} ${parent}`);
-              refs.set(
-                branch,
-                branchRef({ name: branch, head: `${branch}-2` }),
-              );
+              refs.set(branch, branchRef({ name: branch, head: `${branch}-2` }));
               bases.set(`${branch}:${parent}`, refs.get(parent)?.head ?? "");
             }),
           backup: (branch: string, name: string) =>
@@ -884,11 +863,15 @@ const makeLand = (
               );
             }),
           body: (pr: number, body: string) =>
-            Effect.sync(
-              () => void seen.push(`body ${pr} ${body.includes("### [Stack]")}`),
-            ),
+            Effect.sync(() => void seen.push(`body ${pr} ${body.includes("### [Stack]")}`)),
           close: () => Effect.void,
-          create: (branch: string, base: string, title: string, body: string, labels: ReadonlyArray<string>) =>
+          create: (
+            branch: string,
+            base: string,
+            title: string,
+            body: string,
+            labels: ReadonlyArray<string>,
+          ) =>
             Effect.sync(() => {
               const pull = pullRef({
                 number: 6,
@@ -945,7 +928,16 @@ const makeSyncNovel = () => {
   ]);
   let pulls = [
     pullRef({
+      number: 5,
+      title: "fix+refactor(vcs): old title",
+      head: "stack-b",
+      base: "dev",
+      url: "u5",
+      draft: false,
+    }),
+    pullRef({
       number: 3,
+      title: "stack-c",
       head: "stack-c",
       base: "stack-b",
       url: "u3",
@@ -992,9 +984,7 @@ const makeSyncNovel = () => {
             Effect.succeed(
               Option.fromNullishOr(
                 refs.get(name)?.head ??
-                  (name.startsWith("origin/")
-                    ? refs.get(name.slice(7))?.head
-                    : undefined),
+                  (name.startsWith("origin/") ? refs.get(name.slice(7))?.head : undefined),
               ),
             ),
           base: (branch: string, parent: string) =>
@@ -1002,12 +992,13 @@ const makeSyncNovel = () => {
               Option.fromNullishOr(
                 branch === "stack-b" && parent === "origin/dev"
                   ? "dev-1"
-                  : branch === "stack-c" &&
-                      parent.startsWith("backup/stack-sync-")
-                    ? "old-base"
-                    : branch === "stack-c" && parent === "stack-b"
-                      ? "stack-b-1"
-                      : undefined,
+                  : branch === "stack-b" && parent === "dev"
+                    ? "dev-1"
+                    : branch === "stack-c" && parent.startsWith("backup/stack-sync-")
+                      ? "old-base"
+                      : branch === "stack-c" && parent === "stack-b"
+                        ? "stack-b-1"
+                        : undefined,
               ),
             ),
           commits: (from: string, branch: string) =>
@@ -1027,10 +1018,7 @@ const makeSyncNovel = () => {
           replay: (branch: string, parent: string, commits: ReadonlyArray<string>) =>
             Effect.sync(() => {
               seen.push(`rebase ${branch} ${parent} ${commits.join(",")}`);
-              refs.set(
-                branch,
-                branchRef({ name: branch, head: `${branch}-2` }),
-              );
+              refs.set(branch, branchRef({ name: branch, head: `${branch}-2` }));
             }),
           backup: () => Effect.void,
           drop: () => Effect.void,
@@ -1098,9 +1086,7 @@ const makeSyncNovel = () => {
 describe("StackGraph", () => {
   it("builds status nodes from explicit and inferred parents", () => {
     const graph = StackGraph.make({
-      state: stackState([
-        stackLink({ branch: "stack-a", parent: "dev", anchor: "dev", pr: 1 }),
-      ]),
+      state: stackState([stackLink({ branch: "stack-a", parent: "dev", anchor: "dev", pr: 1 })]),
       refs: [ref("dev"), ref("stack-a", "a"), ref("stack-b", "b")],
       pulls: [pr(1, "stack-a", "dev"), pr(2, "stack-b", "stack-a")],
       trunks: ["dev"],
@@ -1124,17 +1110,8 @@ describe("StackGraph", () => {
     ]);
     const graph = StackGraph.make({
       state,
-      refs: [
-        ref("dev"),
-        ref("stack-a", "a"),
-        ref("stack-b", "b"),
-        ref("stack-c", "c"),
-      ],
-      pulls: [
-        pr(1, "stack-a", "dev"),
-        pr(2, "stack-b", "stack-a"),
-        pr(3, "stack-c", "stack-a"),
-      ],
+      refs: [ref("dev"), ref("stack-a", "a"), ref("stack-b", "b"), ref("stack-c", "c")],
+      pulls: [pr(1, "stack-a", "dev"), pr(2, "stack-b", "stack-a"), pr(3, "stack-c", "stack-a")],
       trunks: ["dev"],
       current: "stack-b",
     });
@@ -1183,11 +1160,7 @@ describe("Git", () => {
         ["git", "checkout", "stack-c"],
         ["git", "branch", "-D", temp],
       ]);
-    }).pipe(
-      Effect.provide(
-        Git.live.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc)),
-      ),
-    );
+    }).pipe(Effect.provide(Git.live.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc))));
   });
 });
 
@@ -1217,9 +1190,7 @@ describe("GitHub", () => {
 
     return Effect.gen(function* () {
       const github = yield* GitHub.Service;
-      const fiber = yield* github.wait(4).pipe(
-        Effect.forkChild({ startImmediately: true }),
-      );
+      const fiber = yield* github.wait(4).pipe(Effect.forkChild({ startImmediately: true }));
       yield* Effect.yieldNow;
       expect(calls).toHaveLength(1);
 
@@ -1230,24 +1201,22 @@ describe("GitHub", () => {
       yield* Fiber.join(fiber);
       expect(calls).toHaveLength(2);
     }).pipe(
-      Effect.provide(
-        GitHub.layer.pipe(Layer.provideMerge(cfgLayer), Layer.provideMerge(proc)),
-      ),
+      Effect.provide(GitHub.layer.pipe(Layer.provideMerge(cfgLayer), Layer.provideMerge(proc))),
     );
   });
 });
 
 describe("Stack", () => {
-  it.effect("status uses local stack metadata without inferring from GitHub", () =>
+  it.effect("status shows PR titles when GitHub details are available", () =>
     Effect.gen(function* () {
       const stack = yield* Stack;
       const report = yield* stack.status();
-      const node = report.nodes.find(
-        (item) => item.branch === "effectify-format",
-      );
-      expect(node?.parent).toBeNull();
-      expect(node?.source).toBe("root");
-      expect(node?.issues).toEqual([]);
+      const node = report.nodes.find((item) => item.branch === "effectify-format");
+      expect(node?.parent).toBe("effectify-env-filetime");
+      expect(node?.source).toBe("inferred");
+      expect(node?.title).toBe("Format stack output");
+      expect(node?.issues).toEqual(["inferred-parent"]);
+      expect(renderStatus(report)).toContain("Title: Format stack output");
     }).pipe(Effect.provide(make())),
   );
 
@@ -1255,10 +1224,7 @@ describe("Stack", () => {
     Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const link = yield* stack.adopt(
-        "effectify-format",
-        "effectify-env-filetime",
-      );
+      const link = yield* stack.adopt("effectify-format", "effectify-env-filetime");
       expect(link.anchor).toBe("eee");
 
       const state = yield* store.read();
@@ -1287,19 +1253,13 @@ describe("Stack", () => {
         }),
       );
 
-      const trunk = yield* Effect.flip(
-        stack.adopt("dev", "effectify-watcher"),
-      );
+      const trunk = yield* Effect.flip(stack.adopt("dev", "effectify-watcher"));
       expect(String(trunk)).toContain("cannot track trunk branch");
 
-      const self = yield* Effect.flip(
-        stack.adopt("effectify-format", "effectify-format"),
-      );
+      const self = yield* Effect.flip(stack.adopt("effectify-format", "effectify-format"));
       expect(String(self)).toContain("cannot be its own parent");
 
-      const cycle = yield* Effect.flip(
-        stack.adopt("effectify-format", "effectify-env-filetime"),
-      );
+      const cycle = yield* Effect.flip(stack.adopt("effectify-format", "effectify-env-filetime"));
       expect(String(cycle)).toContain("would create a cycle");
     }).pipe(Effect.provide(make())),
   );
@@ -1309,9 +1269,7 @@ describe("Stack", () => {
       const stack = yield* Stack;
       yield* stack.adopt("effectify-format", "effectify-env-filetime");
       const report = yield* stack.status();
-      const node = report.nodes.find(
-        (item) => item.branch === "effectify-format",
-      );
+      const node = report.nodes.find((item) => item.branch === "effectify-format");
       expect(node?.source).toBe("explicit");
       expect(node?.issues).toEqual([]);
     }).pipe(Effect.provide(make())),
@@ -1355,10 +1313,10 @@ describe("Stack", () => {
       const state = yield* store.read();
       const undo = yield* store.readUndo();
 
-      expect(items).toContain("infer link: effectify-watcher -> dev @ aaa");
-      expect(items).toContain(
-        "infer link: effectify-format -> effectify-env-filetime @ eee",
-      );
+      expect(items).toContain("Synced stack");
+      expect(items).toContain("└─ ● effectify-watcher #17544");
+      expect(items).toContain("            └─ ● effectify-format #17675");
+      expect(items).toContain("Updated PRs: #17544, #17601, #17634, #17640, #17675");
       expect(state.links.map((link) => String(link.branch))).toEqual([
         "effectify-env-filetime",
         "effectify-file-watcher-service",
@@ -1366,9 +1324,7 @@ describe("Stack", () => {
         "effectify-vcs",
         "effectify-watcher",
       ]);
-      expect(
-        state.links.find((link) => link.branch === "standalone"),
-      ).toBeUndefined();
+      expect(state.links.find((link) => link.branch === "standalone")).toBeUndefined();
       expect(undo?.state.links).toEqual([]);
       expect(undo?.actions).toContain("infer link: effectify-watcher -> dev @ aaa");
     }).pipe(Effect.provide(layer));
@@ -1402,11 +1358,10 @@ describe("Stack", () => {
       const state = yield* store.read();
       const undo = yield* store.readUndo();
 
-      expect(items).toContain("infer link: effectify-watcher -> dev @ aaa");
-      expect(items).toContain(
-        "infer link: effectify-file-watcher-service -> effectify-watcher @ bbb",
-      );
-      expect(items).toContain("would update PR body: #17544 Stack block");
+      expect(items).toContain("Sync preview");
+      expect(items).toContain("└─ ● effectify-watcher #17544");
+      expect(items).toContain("   └─ ● effectify-file-watcher-service #17601");
+      expect(items).toContain("Would update PRs: #17544, #17601");
       expect(state.links).toEqual([]);
       expect(undo).toBeNull();
       expect(events).toEqual([]);
@@ -1434,24 +1389,16 @@ describe("Stack", () => {
       const items = yield* stack.sync({ dryRun: true });
       const state = yield* store.read();
 
-      expect(items).toContain(
-        "would remove stale link: stale (no open PR and no open child PR depends on it)",
-      );
-      expect(items).toContain("would update link: stack-b stale -> dev @ aaa");
-      expect(state.links.map((link) => String(link.branch))).toEqual([
-        "stale",
-        "stack-b",
-      ]);
+      expect(items).toContain("Sync preview");
+      expect(items).toContain("└─ ◌ stack-b #2 would rebase onto dev");
+      expect(items).toContain("Would update PRs: #2");
+      expect(state.links.map((link) => String(link.branch))).toEqual(["stale", "stack-b"]);
     }).pipe(Effect.provide(layer));
   });
 
   it.effect("sync restores the current branch when link refresh fails", () => {
     const seen: Array<string> = [];
-    const refs = [
-      ref("dev", "dev-1"),
-      ref("stack-a", "a-1"),
-      ref("stack-b", "b-1"),
-    ];
+    const refs = [ref("dev", "dev-1"), ref("stack-a", "a-1"), ref("stack-b", "b-1")];
     const layer = stackTestLayer({
       current: "stack-b",
       refs,
@@ -1459,10 +1406,7 @@ describe("Stack", () => {
       bases: bases(["stack-a", "dev", "dev-1"], ["stack-b", "stack-a", "a-1"]),
       service: {
         switch: (branch) => Effect.sync(() => void seen.push(`switch ${branch}`)),
-        body: (number) =>
-          Effect.fail(
-            new ExecError("gh", ["pr", "edit", `${number}`], 1, "boom"),
-          ),
+        body: (number) => Effect.fail(new ExecError("gh", ["pr", "edit", `${number}`], 1, "boom")),
       },
     });
 
@@ -1496,9 +1440,7 @@ describe("Stack", () => {
         }),
       );
       const report = yield* stack.status();
-      const node = report.nodes.find(
-        (item) => item.branch === "effectify-format",
-      );
+      const node = report.nodes.find((item) => item.branch === "effectify-format");
       expect(node?.issues).toContain("missing-parent");
     }).pipe(Effect.provide(make())),
   );
@@ -1509,9 +1451,10 @@ describe("Stack", () => {
       yield* stack.adopt("effectify-format", "effectify-env-filetime");
       const view = renderStatus(yield* stack.status());
       expect(view).toContain("└─ effectify-format 👈 current");
-      expect(view).toContain("PR: #17675 https://github.com/kit/stack/pull/17675");
+      expect(view).toContain("PR: #17675 u5");
+      expect(view).toContain("Title: Format stack output");
       expect(view).toContain("effectify-env-filetime");
-      expect(view).not.toContain("inferred-parent");
+      expect(view).toContain("inferred-parent");
     }).pipe(Effect.provide(make())),
   );
 
@@ -1521,7 +1464,12 @@ describe("Stack", () => {
         stackLink({ branch: "stack-a", parent: "dev", anchor: "dev", pr: 1 }),
         stackLink({ branch: "stack-b", parent: "stack-a", anchor: "a", pr: 2 }),
         stackLink({ branch: "other", parent: "dev", anchor: "dev", pr: 3 }),
-        stackLink({ branch: "backup/stack-sync-old-stack-b", parent: "dev", anchor: "dev", pr: null }),
+        stackLink({
+          branch: "backup/stack-sync-old-stack-b",
+          parent: "dev",
+          anchor: "dev",
+          pr: null,
+        }),
       ]),
       refs: [
         ref("dev"),
@@ -1565,133 +1513,102 @@ describe("Stack", () => {
     }).pipe(Effect.provide(make())),
   );
 
-  it.effect("repair fixes a missing parent and recreates the child pr", () => {
+  it.effect("sync fixes a missing parent and recreates the child pr", () => {
     const test = makeSync();
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.repair(true);
+      const items = yield* stack.sync();
       const state = yield* store.read();
 
-      expect(items).toContain("reparent stack-b: stack-a -> dev");
-      expect(
-        items.some((item) =>
-          item.startsWith("backup stack-b -> backup/stack-sync-"),
-        ),
-      ).toBe(true);
-      expect(items).toContain("rebase stack-b onto dev");
-      expect(items).toContain("create pr #6 for stack-b -> dev");
-      expect(
-        items.some((item) =>
-          item.startsWith("backup stack-c -> backup/stack-sync-"),
-        ),
-      ).toBe(true);
-      expect(items).toContain("rebase stack-c onto stack-b");
+      expect(items).toContain("Synced stack");
+      expect(items).toContain("└─ ✓ stack-b #5 rebased onto dev");
+      expect(items).toContain("   └─ ✓ stack-c #3 rebased onto stack-b");
+      expect(items).toContain("Updated PRs: #3, #5");
+      expect(items).toContain("Backups created: 2");
       expect(test.seen[0]).toBe("fetch");
-      expect(
-        test.seen[1]?.startsWith("backup stack-b backup/stack-sync-"),
-      ).toBe(true);
+      expect(test.seen[1]?.startsWith("backup stack-b backup/stack-sync-")).toBe(true);
       expect(test.seen[2]).toBe("rebase stack-b origin/dev");
       expect(test.seen[3]).toBe("push stack-b");
-      expect(test.seen[4]).toBe(
-        "create stack-b dev fix+refactor(vcs): old title",
-      );
-      expect(test.seen[5]).toContain(
-        "Restacked from #5 onto `dev` after parent merge.",
-      );
-      expect(test.seen[6]).toBe("labels beta");
-      expect(
-        test.seen[7]?.startsWith("backup stack-c backup/stack-sync-"),
-      ).toBe(true);
-      expect(test.seen[8]).toBe("rebase stack-c stack-b");
-      expect(test.seen[9]).toBe("push stack-c");
-      expect(
-        state.links.find((item) => item.branch === "stack-b")?.parent,
-      ).toBe("dev");
-      expect(state.links.find((item) => item.branch === "stack-b")?.pr).toBe(6);
-      expect(
-        state.links.find((item) => item.branch === "stack-c")?.anchor,
-      ).toBe("stack-b-2");
+      expect(test.seen[4]?.startsWith("backup stack-c backup/stack-sync-")).toBe(true);
+      expect(test.seen[5]).toBe("rebase stack-c stack-b");
+      expect(test.seen[6]).toBe("push stack-c");
+      expect(state.links.find((item) => item.branch === "stack-b")?.parent).toBe("dev");
+      expect(state.links.find((item) => item.branch === "stack-b")?.pr).toBe(5);
+      expect(state.links.find((item) => item.branch === "stack-c")?.anchor).toBe("stack-b-2");
     }).pipe(Effect.provide(test.layer));
   });
 
-  it.effect("repair is dry-run by default", () => {
+  it.effect("sync dry-run previews without mutating", () => {
     const test = makeSync();
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.repair();
+      const items = yield* stack.sync({ dryRun: true });
       const state = yield* store.read();
       const undo = yield* store.readUndo();
 
-      expect(items).toContain("would reparent stack-b: stack-a -> dev");
-      expect(items).toContain("would rebase stack-b onto dev");
-      expect(items).toContain("would create pr for stack-b -> dev");
+      expect(items).toContain("Sync preview");
+      expect(items).toContain("└─ ◌ stack-b #5 would rebase onto dev");
+      expect(items).toContain("   └─ ◌ stack-c #3 would rebase onto stack-b");
       expect(test.seen).toEqual(["fetch"]);
-      expect(
-        state.links.find((item) => item.branch === "stack-b")?.parent,
-      ).toBe("stack-a");
+      expect(state.links.find((item) => item.branch === "stack-b")?.parent).toBe("stack-a");
       expect(undo).toBeNull();
     }).pipe(Effect.provide(test.layer));
   });
 
-  it.effect(
-    "repair filters already-upstream parent commits before replay",
-    () => {
-      const test = makeSyncNovel();
+  it.effect("sync filters already-upstream parent commits before replay", () => {
+    const test = makeSyncNovel();
 
-      return Effect.gen(function* () {
-        const stack = yield* Stack;
-        const items = yield* stack.repair(true);
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const items = yield* stack.sync();
 
-        expect(items).toContain("rebase stack-b onto dev");
-        expect(items).toContain("rebase stack-c onto stack-b");
-        expect(test.seen).toContain("rebase stack-c stack-b c1");
-        expect(test.seen).not.toContain("rebase stack-c stack-b b1,b2,c1");
-      }).pipe(Effect.provide(test.layer));
-    },
-  );
+      expect(items).toContain("└─ ✓ stack-b #5 rebased onto dev");
+      expect(items).toContain("   └─ ✓ stack-c #3 rebased onto stack-b");
+      expect(test.seen).toContain("rebase stack-c stack-b c1");
+      expect(test.seen).not.toContain("rebase stack-c stack-b b1,b2,c1");
+    }).pipe(Effect.provide(test.layer));
+  });
 
-  it.effect(
-    "sync uses stored child anchor after squash-merged parent is removed",
-    () => {
-      const seen: Array<string> = [];
-      const pulls = [pr(2, "child", "dev")];
-      const layer = stackTestLayer({
-        current: "child",
-        refs: [ref("dev", "dev-squash"), ref("child", "child-head")],
-        pulls,
-        bases: bases(["child", "dev", "dev-squash"]),
-        state: stackState([
-          stackLink({ branch: "parent", parent: "dev", anchor: "dev-old", pr: 1 }),
-          stackLink({ branch: "child", parent: "parent", anchor: "parent-anchor", pr: 2 }),
-        ]),
-        service: {
-          commits: (from: string, branch: string) =>
-            Effect.succeed(
-              branch === "child" && from === "parent-anchor"
-                ? ["child-only"]
-                : branch === "child" && from === "dev-squash"
-                  ? ["parent-1", "parent-2", "child-only"]
-                  : [],
-            ),
-          novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) => Effect.succeed(commits),
-          replay: (branch: string, parent: string, commits: ReadonlyArray<string>) =>
-            Effect.sync(() => seen.push(`rebase ${branch} ${parent} ${commits.join(",")}`)),
-        },
-      });
+  it.effect("sync uses stored child anchor after squash-merged parent is removed", () => {
+    const seen: Array<string> = [];
+    const pulls = [pr(2, "child", "dev")];
+    const layer = stackTestLayer({
+      current: "child",
+      refs: [ref("dev", "dev-squash"), ref("child", "child-head")],
+      pulls,
+      bases: bases(["child", "dev", "dev-squash"]),
+      state: stackState([
+        stackLink({ branch: "parent", parent: "dev", anchor: "dev-old", pr: 1 }),
+        stackLink({ branch: "child", parent: "parent", anchor: "parent-anchor", pr: 2 }),
+      ]),
+      service: {
+        commits: (from: string, branch: string) =>
+          Effect.succeed(
+            branch === "child" && from === "parent-anchor"
+              ? ["child-only"]
+              : branch === "child" && from === "dev-squash"
+                ? ["parent-1", "parent-2", "child-only"]
+                : [],
+          ),
+        novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) =>
+          Effect.succeed(commits),
+        replay: (branch: string, parent: string, commits: ReadonlyArray<string>) =>
+          Effect.sync(() => seen.push(`rebase ${branch} ${parent} ${commits.join(",")}`)),
+      },
+    });
 
-      return Effect.gen(function* () {
-        const stack = yield* Stack;
-        yield* stack.sync({ dryRun: false });
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.sync({ dryRun: false });
 
-        expect(seen).toContain("rebase child origin/dev child-only");
-        expect(seen).not.toContain("rebase child origin/dev parent-1,parent-2,child-only");
-      }).pipe(Effect.provide(layer));
-    },
-  );
+      expect(seen).toContain("rebase child origin/dev child-only");
+      expect(seen).not.toContain("rebase child origin/dev parent-1,parent-2,child-only");
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("undo restores the last applied mutation", () => {
     const test = makeSync();
@@ -1699,7 +1616,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      yield* stack.repair(true);
+      yield* stack.sync();
       const items = yield* stack.undo(true);
       const state = yield* store.read();
       const undo = yield* store.readUndo();
@@ -1707,24 +1624,18 @@ describe("Stack", () => {
       expect(
         items.some(
           (item) =>
-            item === "switch to dev" ||
-            item.startsWith("restore stack-b from backup/stack-sync-"),
+            item === "switch to dev" || item.startsWith("restore stack-b from backup/stack-sync-"),
         ),
       ).toBe(true);
       expect(items).toContain("switch to dev");
       expect(items).toContain("push stack-b");
-      expect(items).toContain("close #6");
       expect(items).toContain("restore stack metadata");
       expect(test.seen).toContain("switch dev");
-      expect(
-        test.seen.some((item) =>
-          item.startsWith("restore stack-b backup/stack-sync-"),
-        ),
-      ).toBe(true);
-      expect(test.seen).toContain("close 6");
-      expect(
-        state.links.find((item) => item.branch === "stack-b")?.parent,
-      ).toBe("stack-a");
+      expect(test.seen.some((item) => item.startsWith("restore stack-b backup/stack-sync-"))).toBe(
+        true,
+      );
+      expect(test.seen).not.toContain("close 6");
+      expect(state.links.find((item) => item.branch === "stack-b")?.parent).toBe("stack-a");
       expect(undo).toBeNull();
     }).pipe(Effect.provide(test.layer));
   });
@@ -1734,12 +1645,11 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      yield* stack.repair(true);
+      yield* stack.sync();
       const items = yield* stack.last();
 
       expect(items[0]?.startsWith("last mutation: ")).toBe(true);
       expect(items).toContain("rebase stack-b onto dev");
-      expect(items).toContain("create pr #6 for stack-b -> dev");
       expect(items).toContain("undo with: stack undo --apply");
     }).pipe(Effect.provide(test.layer));
   });
@@ -1763,26 +1673,23 @@ describe("Stack", () => {
     }).pipe(Effect.provide(test.layer));
   });
 
-  it.effect(
-    "links render the stack as chronological GitHub checkboxes",
-    () => {
-      const test = makeSync();
+  it.effect("links render the stack as chronological GitHub checkboxes", () => {
+    const test = makeSync();
 
-      return Effect.gen(function* () {
-        const stack = yield* Stack;
-        yield* stack.links(true);
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.links(true);
 
-        const body = test.bodies.get(3) ?? "";
-        expect(body).not.toContain("Base:");
-        expect(body).not.toContain("Earlier in Stack");
-        expect(body).not.toContain("Current / Remaining");
-        expect(body).not.toContain("\nMerged\n");
-        expect(body).toContain("1. #4");
-        expect(body).toContain("2. #5");
-        expect(body).toContain("3. **#3** 👈 current");
-      }).pipe(Effect.provide(test.layer));
-    },
-  );
+      const body = test.bodies.get(3) ?? "";
+      expect(body).not.toContain("Base:");
+      expect(body).not.toContain("Earlier in Stack");
+      expect(body).not.toContain("Current / Remaining");
+      expect(body).not.toContain("\nMerged\n");
+      expect(body).toContain("1. #4");
+      expect(body).toContain("2. #5");
+      expect(body).toContain("3. **#3** 👈 current");
+    }).pipe(Effect.provide(test.layer));
+  });
 
   it.effect("links render the current path through a forked stack", () => {
     const bodies = new Map<number, string>();
@@ -1838,11 +1745,9 @@ describe("Stack", () => {
           restore: () => Effect.void,
           push: () => Effect.void,
           edit: () => Effect.void,
-          body: (pr: number, body: string) =>
-            Effect.sync(() => void bodies.set(pr, body)),
+          body: (pr: number, body: string) => Effect.sync(() => void bodies.set(pr, body)),
           close: () => Effect.void,
-          create: () =>
-            Effect.fail(new ExecError("gh", ["pr", "create"], 1, "unused")),
+          create: () => Effect.fail(new ExecError("gh", ["pr", "create"], 1, "unused")),
         }),
       ),
       Layer.provideMerge(
@@ -1926,9 +1831,7 @@ describe("Stack", () => {
       pulls,
       state: new StackState({
         version: 1,
-        links: [
-          stackLink({ branch: "stack-b", parent: "dev", anchor: "dev", pr: 4 }),
-        ],
+        links: [stackLink({ branch: "stack-b", parent: "dev", anchor: "dev", pr: 4 })],
       }),
       service: {
         pull: (number) =>
@@ -1965,9 +1868,7 @@ describe("Stack", () => {
       pulls,
       state: new StackState({
         version: 1,
-        links: [
-          stackLink({ branch: "stack-b", parent: "dev", anchor: "dev", pr: 4 }),
-        ],
+        links: [stackLink({ branch: "stack-b", parent: "dev", anchor: "dev", pr: 4 })],
       }),
       service: {
         pull: (number) =>
@@ -1996,11 +1897,9 @@ describe("Stack", () => {
       const stack = yield* Stack;
       const plan = yield* stack.land("stack-a");
       expect(plan).toContain("would merge #4 (stack-a)");
-      expect(
-        plan.some((item) =>
-          item.startsWith("would backup stack-a -> backup/landed-"),
-        ),
-      ).toBe(true);
+      expect(plan.some((item) => item.startsWith("would backup stack-a -> backup/landed-"))).toBe(
+        true,
+      );
     })
       .pipe(Effect.provide(planTest.layer))
       .pipe(
@@ -2016,9 +1915,7 @@ describe("Stack", () => {
             expect(done).toContain("Stack");
             expect(done.join("\n")).toContain("└─ stack-b #5");
             expect(doneTest.seen[0]).toBe("switch dev");
-            expect(
-              doneTest.seen[1]?.startsWith("backup stack-a backup/landed-"),
-            ).toBe(true);
+            expect(doneTest.seen[1]?.startsWith("backup stack-a backup/landed-")).toBe(true);
             expect(doneTest.seen[2]).toBe("edit 5 dev");
             expect(doneTest.seen[3]).toBe("merge 4");
             expect(doneTest.seen[4]).toBe("drop stack-a");
@@ -2062,9 +1959,7 @@ describe("Stack", () => {
       expect(done).toContain("reparent stack-b: stack-a -> dev");
       expect(done).toContain("next root: stack-b");
       expect(test.seen[0]).toBe("switch dev");
-      expect(test.seen[1]?.startsWith("backup stack-a backup/landed-")).toBe(
-        true,
-      );
+      expect(test.seen[1]?.startsWith("backup stack-a backup/landed-")).toBe(true);
       expect(test.seen[2]).toBe("edit 5 dev");
       expect(test.seen[3]).toBe("auto 4");
       expect(test.seen[4]).toBe("wait 4 merged");
@@ -2095,13 +1990,9 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const error = yield* Effect.flip(
-        stack.land(undefined, { auto: true, through: "stack-z" }),
-      );
+      const error = yield* Effect.flip(stack.land(undefined, { auto: true, through: "stack-z" }));
 
-      expect(String(error)).toContain(
-        "stack-z is not in the current stack from stack-a",
-      );
+      expect(String(error)).toContain("stack-z is not in the current stack from stack-a");
       expect(test.seen).not.toContain("auto 4");
     }).pipe(Effect.provide(test.layer));
   });
@@ -2111,9 +2002,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const error = yield* Effect.flip(
-        stack.land(undefined, { through: "stack-b" }),
-      );
+      const error = yield* Effect.flip(stack.land(undefined, { through: "stack-b" }));
 
       expect(String(error)).toContain("use --through only with --auto");
     }).pipe(Effect.provide(test.layer));
@@ -2136,9 +2025,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const error = yield* Effect.flip(
-        stack.land("stack-a", { admin: true }),
-      );
+      const error = yield* Effect.flip(stack.land("stack-a", { admin: true }));
 
       expect(String(error)).toContain("use --admin only with --apply");
     }).pipe(Effect.provide(test.layer));
@@ -2171,7 +2058,7 @@ describe("Stack", () => {
     }).pipe(Effect.provide(test.layer));
   });
 
-  it.effect("repair rebases descendants when an older PR branch changes", () =>
+  it.effect("sync rebases descendants when an older PR branch changes", () =>
     Effect.gen(function* () {
       const root = yield* tempDir();
       const origin = join(root, "origin.git");
@@ -2250,18 +2137,74 @@ describe("Stack", () => {
 
       const items = yield* Effect.gen(function* () {
         const stack = yield* Stack;
-        return yield* stack.repair(true);
+        return yield* stack.sync();
       }).pipe(Effect.provide(layer));
 
       expect(items).not.toContain("rebase stack-b onto dev");
-      expect(items).toContain("rebase stack-c onto stack-b");
+      expect(items).toContain("   └─ ✓ stack-c #3 rebased onto stack-b");
       expect(yield* shell(repo, "git", ["merge-base", "stack-c", "stack-b"])).toBe(
         yield* shell(repo, "git", ["rev-parse", "stack-b"]),
       );
     }).pipe(Effect.provide(platform)),
   );
 
-  it.effect("repair is idempotent after repairing a moved parent", () =>
+  it.effect("sync rebases a deep stack when PR 2 is refactored", () =>
+    Effect.gen(function* () {
+      const scenario = yield* realStack({
+        branches: [
+          {
+            name: "stack-2",
+            parent: "dev",
+            number: 2,
+            commits: [{ file: "two.txt", body: "two\n", message: "two" }],
+          },
+          {
+            name: "stack-3",
+            parent: "stack-2",
+            number: 3,
+            commits: [{ file: "three.txt", body: "three\n", message: "three" }],
+          },
+          {
+            name: "stack-4",
+            parent: "stack-3",
+            number: 4,
+            commits: [{ file: "four.txt", body: "four\n", message: "four" }],
+          },
+          {
+            name: "stack-5",
+            parent: "stack-4",
+            number: 5,
+            commits: [{ file: "five.txt", body: "five\n", message: "five" }],
+          },
+        ],
+      });
+
+      yield* scenario.git(["checkout", "stack-2"]);
+      yield* commitFile(scenario.repo, "two-refactor.txt", "two refactor\n", "two refactor");
+      yield* scenario.git(["push", "origin", "stack-2"]);
+
+      const items = yield* Effect.gen(function* () {
+        const stack = yield* Stack;
+        return yield* stack.sync();
+      }).pipe(Effect.provide(scenario.layer));
+
+      expect(items).not.toContain("rebase stack-2 onto dev");
+      expect(items).toContain("   └─ ✓ stack-3 #3 rebased onto stack-2");
+      expect(items).toContain("      └─ ✓ stack-4 #4 rebased onto stack-3");
+      expect(items).toContain("         └─ ✓ stack-5 #5 rebased onto stack-4");
+      expect(yield* scenario.git(["merge-base", "stack-3", "stack-2"])).toBe(
+        yield* scenario.git(["rev-parse", "stack-2"]),
+      );
+      expect(yield* scenario.git(["merge-base", "stack-4", "stack-3"])).toBe(
+        yield* scenario.git(["rev-parse", "stack-3"]),
+      );
+      expect(yield* scenario.git(["merge-base", "stack-5", "stack-4"])).toBe(
+        yield* scenario.git(["rev-parse", "stack-4"]),
+      );
+    }).pipe(Effect.provide(platform)),
+  );
+
+  it.effect("sync is idempotent after repairing a moved parent", () =>
     Effect.gen(function* () {
       const scenario = yield* realStack({
         branches: [
@@ -2286,14 +2229,14 @@ describe("Stack", () => {
 
       const result = yield* Effect.gen(function* () {
         const stack = yield* Stack;
-        const first = yield* stack.repair(true);
-        const second = yield* stack.repair(true);
+        const first = yield* stack.sync();
+        const second = yield* stack.sync();
         return { first, second };
       }).pipe(Effect.provide(scenario.layer));
 
-      expect(result.first).toContain("rebase stack-c onto stack-b");
-      expect(result.second).not.toContain("rebase stack-c onto stack-b");
-      expect(result.second).toContain("stack links are current");
+      expect(result.first).toContain("   └─ ✓ stack-c #3 rebased onto stack-b");
+      expect(result.second).not.toContain("   └─ ✓ stack-c #3 rebased onto stack-b");
+      expect(result.second).toContain("Stack is current");
     }).pipe(Effect.provide(platform)),
   );
 
@@ -2339,15 +2282,9 @@ describe("Stack", () => {
         return { items, state, undo };
       }).pipe(Effect.provide(scenario.layer));
 
-      expect(result.items).toContain(
-        `infer link: stack-a -> dev @ ${scenario.heads.get("dev")}`,
-      );
-      expect(result.items).toContain(
-        `infer link: stack-b -> stack-a @ ${scenario.heads.get("stack-a")}`,
-      );
-      expect(result.items).toContain(
-        `infer link: stack-c -> stack-b @ ${scenario.heads.get("stack-b")}`,
-      );
+      expect(result.items).toContain("└─ ● stack-a #2");
+      expect(result.items).toContain("   └─ ● stack-b #3");
+      expect(result.items).toContain("      └─ ● stack-c #4");
       expect(result.state.links.map((link) => String(link.branch))).toEqual([
         "stack-a",
         "stack-b",
@@ -2358,7 +2295,7 @@ describe("Stack", () => {
     }).pipe(Effect.provide(platform)),
   );
 
-  it.effect("repair keeps backup and undo journal when replay conflicts", () =>
+  it.effect("sync explains failed replay and keeps backup and undo journal", () =>
     Effect.gen(function* () {
       const scenario = yield* realStack({
         base: [{ file: "conflict.txt", body: "base\n", message: "base" }],
@@ -2386,10 +2323,16 @@ describe("Stack", () => {
         const stack = yield* Stack;
         const store = yield* Store;
         let failed = false;
-        yield* stack.repair(true).pipe(
-          Effect.catch(() => Effect.sync(() => {
-            failed = true;
-          })),
+        yield* stack.sync().pipe(
+          Effect.catch((err) =>
+            Effect.sync(() => {
+              failed = true;
+              expect(String(err)).toContain("✕ stack-c #3 failed to rebase onto stack-b");
+              expect(String(err)).toContain("stack-c could not be replayed onto stack-b");
+              expect(String(err)).toContain("stack undo --apply");
+              expect(String(err)).toContain("stack sync");
+            }),
+          ),
         );
         const undo = yield* store.readUndo();
         return { failed, undo };
@@ -2433,7 +2376,7 @@ describe("Stack", () => {
 
       const result = yield* Effect.gen(function* () {
         const stack = yield* Stack;
-        yield* stack.repair(true);
+        yield* stack.sync();
         const repaired = yield* scenario.git(["rev-parse", "stack-c"]);
         yield* stack.undo(true);
         const restored = yield* scenario.git(["rev-parse", "stack-c"]);
@@ -2454,10 +2397,7 @@ describe("Stack", () => {
       yield* stack.land("stack-a", { apply: true }).pipe(
         Effect.catch((cause) =>
           Effect.sync(() => {
-            err =
-              cause instanceof DirtyWorktreeError
-                ? cause.message
-                : String(cause);
+            err = cause instanceof DirtyWorktreeError ? cause.message : String(cause);
           }),
         ),
       );

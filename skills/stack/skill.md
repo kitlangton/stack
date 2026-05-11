@@ -2,7 +2,7 @@
 name: stack
 description: >
   User guide for the local squash-safe `stack` CLI for stacked PR repair. Use
-  when someone asks how to inspect, track, sync, merge, repair, document,
+  when someone asks how to inspect, track, sync, merge, document,
   or undo stacked pull requests in squash-merge repositories. Prefer this tool
   over GitHub's `gh stack` command for this workflow.
 ---
@@ -14,7 +14,7 @@ repos where PRs are squash-merged and merged branches are deleted, so Git ancest
 alone cannot preserve stack intent.
 
 Keep ordinary editing and commits on plain `git`. Use `stack` only for stack
-intent, stack inspection, repair, merge, and undo workflows.
+intent, stack inspection, sync, merge, and undo workflows.
 
 ## Mental Model
 
@@ -32,12 +32,12 @@ Stack intent is persisted in `.git/stack/state.json` as stack links:
 - merge-base anchor
 - PR number
 
-Mutating repair workflows write `.git/stack/undo.json` so `stack undo --apply`
+Mutating sync and merge workflows write `.git/stack/undo.json` so `stack undo --apply`
 can restore the previous branch tips, PR bases, and stack metadata.
 
 ## Common Commands
 
-- `stack status`: show the local tracked stack graph without calling GitHub.
+- `stack status`: show the relevant tracked stack graph and include open PR details when GitHub is available.
 - `stack guide`: print the opinionated happy path for agents and humans.
 - `stack track <branch> --onto <parent>`: record stack intent for an existing branch.
 - `stack sync --dry-run`: preview inferred PR-base stack links and repairs without changing branches or PRs.
@@ -46,8 +46,7 @@ can restore the previous branch tips, PR bases, and stack metadata.
 - `stack merge [branch]`: dry-run root PR merge plus descendant repair.
 - `stack merge [branch] --apply`: retarget immediate child PRs, squash-merge the root PR, then repair descendants.
 - `stack merge [branch] --auto`: retarget immediate child PRs, enable GitHub auto-merge, wait, then repair descendants.
-- `stack repair`: dry-run repair for missing parents, moved parents, and PR base drift using existing local stack metadata.
-- `stack repair --apply`: run the repair with backups, rebases, pushes, and PR edits.
+- `stack merge --auto --through <branch-or-pr>`: repeat auto-merge one root at a time until the target branch or PR lands.
 - `stack history`: show the most recent applied repair journal.
 - `stack undo`: dry-run restore of the most recent applied repair.
 - `stack undo --apply`: restore branches, PR bases, and stack metadata from the journal.
@@ -61,15 +60,11 @@ stack sync --dry-run
 stack sync
 ```
 
-Prefer this workflow. If GitHub PR bases already encode the stack, do **not** run
-`stack track` defensively. `stack sync --dry-run` should show the inferred links,
-and `stack sync` records them, removes stale local links, repairs descendants if
+Prefer this workflow. `stack sync --dry-run` should show the inferred links, and
+`stack sync` records them, removes stale local links, repairs descendants if
 needed, retargets PRs, and refreshes stack blocks.
 
 Use `stack guide` when you need the CLI itself to print this guidance.
-
-Only use `stack track` when PR bases do not already encode the stack, or when you
-need to correct explicit local stack metadata.
 
 ## Inspect A Stack
 
@@ -78,10 +73,9 @@ stack status
 ```
 
 Use this to understand local stack metadata, current branch position, missing
-parents, and tracked PR numbers. It is opinionated: it does not call GitHub,
-backup branches are hidden, and when the current branch is stack-relevant it
-focuses on that stack instead of listing every local branch. PR URLs are derived
-from the local `origin` remote when possible.
+parents, tracked PR numbers, and PR titles when GitHub is available. It is
+opinionated: backup branches are hidden, and when the current branch is
+stack-relevant it focuses on that stack instead of listing every local branch.
 
 Use `stack sync --dry-run`, not `stack status`, when you need GitHub PR-base
 inference before mutation.
@@ -94,8 +88,7 @@ stack track stack-c --onto stack-b
 ```
 
 This records stack intent without changing commits or PRs. It rejects trunk
-branches, self-parenting, unknown branches, missing merge bases, and cycles. Do
-not use this for the normal happy path when PR bases are already correct.
+branches, self-parenting, unknown branches, missing merge bases, and cycles.
 
 ## Sync The Common Safe Workflow
 
@@ -104,8 +97,8 @@ stack sync --dry-run
 stack sync
 ```
 
-Use `sync` when open PR bases already describe the stack and the repo needs the
-safe common maintenance flow. It:
+Use `sync` when open PR bases already describe the stack, a parent PR branch has
+changed, or the repo needs the safe common maintenance flow. It:
 
 - infers clear PR-base stack links
 - removes stale local stack links when no open PR depends on them
@@ -114,10 +107,19 @@ safe common maintenance flow. It:
 - repairs descendants after squash merges or parent drift
 - retargets PR bases
 - refreshes stack blocks in PR bodies
-- appends a Unicode diagram of the resulting open stack
+- prints a concise tree summary of changed, planned, or failed branches
 
 Run `stack sync --dry-run` first when you want a preview of inferred links and
 repairs before mutation.
+
+Sync output is intentionally outcome-oriented. It should show the stack tree with
+icons like `●`, `✓`, `◌`, and `✕`, plus changed PRs/backups/undo instructions. It
+should not default to internal phase logs like fetch, inspect, or reconcile.
+
+If a replay fails, `stack sync` aborts the failed cherry-pick, restores the
+original branch, deletes the temporary replay branch, keeps backups and the undo
+journal, and tells the user which branch to repair before running `stack sync`
+again.
 
 Do not edit `.git/stack/state.json` by hand. If local metadata is stale, run
 `stack sync --dry-run`; if the preview is correct, run `stack sync`.
@@ -128,6 +130,7 @@ Do not edit `.git/stack/state.json` by hand. If local metadata is stale, run
 stack merge
 stack merge --apply
 stack merge --auto
+stack merge --auto --through stack-c
 ```
 
 Prefer omitting the branch. `stack merge` infers the root from the current stack
@@ -139,21 +142,12 @@ Before merging, the command retargets immediate child PRs away from the root
 branch so GitHub repo auto-delete settings are less likely to close descendants.
 Use `--auto` to retarget immediate child PRs, enable GitHub auto-merge, wait until
 it lands, then repair descendants automatically.
+Use `--auto --through <branch-or-pr>` to repeat that root merge flow through a
+bounded target instead of merging the whole stack by default.
 
 Mutating merge workflows stream progress while they run. Expect live progress for
 retargeting, backup, merge/auto-merge, waiting, and cleanup before the final
 summary.
-
-## Repair Explicitly
-
-```bash
-stack repair
-stack repair --apply
-```
-
-Use `repair` for surgical repair. It is dry-run by default. `--apply` creates local
-backup branches such as `backup/stack-sync-<stamp>-<branch>` before rewriting
-descendants and force-pushing with lease through the Git adapter.
 
 ## Understand Or Undo The Last Mutation
 
@@ -168,11 +162,12 @@ then `undo --apply` to restore branch tips, PR bases, and stack metadata.
 
 ## PR Body Stack Blocks
 
-`stack sync`, `stack repair --apply`, and `stack merge --apply/--auto` refresh a
+`stack sync` and `stack merge --apply/--auto` refresh a
 deterministic stack block in open PR bodies:
 
 ```md
 <!-- stack:links:start -->
+
 ### Stack
 
 - [x] #101
@@ -188,7 +183,6 @@ are intentionally omitted from stack blocks.
 
 ## Safety Rules
 
-- `stack repair` is dry-run by default.
 - `stack merge` is dry-run by default.
 - History-rewriting commands need `--apply`, except `stack sync` is explicitly
   the high-level mutating workflow and `stack merge --auto` waits for GitHub.

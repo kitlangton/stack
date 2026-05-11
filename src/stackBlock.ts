@@ -77,18 +77,12 @@ export const render = (opts: {
     ...chain.map(line),
   ];
 
-  return [
-    start,
-    heading,
-    "",
-    ...items.map((item, index) => `${index + 1}. ${item}`),
-    end,
-  ].join("\n");
+  return [start, heading, "", ...items.map((item, index) => `${index + 1}. ${item}`), end].join(
+    "\n",
+  );
 };
 
 export const splice = (body: string, next: string) => {
-  const cleaned = body
-    .replace(new RegExp(`${start}[\\s\\S]*?${end}\n*`, "g"), "")
-    .trimEnd();
+  const cleaned = body.replace(new RegExp(`${start}[\\s\\S]*?${end}\n*`, "g"), "").trimEnd();
   return cleaned ? `${cleaned}\n\n${next}` : next;
 };

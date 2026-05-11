@@ -28,20 +28,14 @@ export const rebaseBranch = (
   { _tag: "Push", mode, branch: plan.branch },
 ];
 
-export const retargetPull = (
-  plan: RetargetPullPlan,
-  mode: Mode,
-): StackResultItem => ({
+export const retargetPull = (plan: RetargetPullPlan, mode: Mode): StackResultItem => ({
   _tag: "RetargetPull",
   mode,
   pr: plan.pr,
   base: plan.base,
 });
 
-export const createPull = (
-  plan: CreatePullPlan,
-  mode: Mode,
-): StackResultItem => ({
+export const createPull = (plan: CreatePullPlan, mode: Mode): StackResultItem => ({
   _tag: "CreatePull",
   mode,
   branch: plan.branch,

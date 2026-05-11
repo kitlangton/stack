@@ -8,6 +8,9 @@ export interface RenderStatusOptions {
 
 const isBackup = (branch: string) => branch.startsWith("backup/");
 
+const truncate = (text: string, max = 72) =>
+  text.length > max ? `${text.slice(0, max - 1)}…` : text;
+
 const filterReport = (report: StatusReport) => {
   const nodes = new Map(report.nodes.map((node) => [String(node.branch), node]));
   const tree = treeFromStatus(report);
@@ -37,9 +40,7 @@ const filterReport = (report: StatusReport) => {
 
   const current = nodes.get(report.current);
   const currentIsStack =
-    current &&
-    !isBackup(String(current.branch)) &&
-    stacked.has(String(current.branch));
+    current && !isBackup(String(current.branch)) && stacked.has(String(current.branch));
 
   if (currentIsStack) {
     addAncestors(report.current);
@@ -62,10 +63,7 @@ const filterReport = (report: StatusReport) => {
   });
 };
 
-export const renderStatus = (
-  report: StatusReport,
-  opts: RenderStatusOptions = {},
-) => {
+export const renderStatus = (report: StatusReport, opts: RenderStatusOptions = {}) => {
   const tree = treeFromStatus(filterReport(report));
   const style = { pretty: opts.pretty ?? false };
 
@@ -96,14 +94,15 @@ export const renderStatus = (
       node.issues.length > 0
         ? ` ${Terminal.paint(style, Terminal.color.red, `[${node.issues.join(", ")}]`)}`
         : "";
-    const marker = current
-      ? ` ${Terminal.paint(style, Terminal.color.green, "👈 current")}`
-      : "";
+    const marker = current ? ` ${Terminal.paint(style, Terminal.color.green, "👈 current")}` : "";
     lines.push(`${prefix}${connector} ${branch}${marker}${source}${issues}`);
     if (pr) {
       lines.push(
         `${prefix}   PR: ${pr}${url ? ` ${Terminal.paint(style, Terminal.color.dim, url)}` : ""}`,
       );
+    }
+    if (node.title) {
+      lines.push(`${prefix}   Title: ${truncate(String(node.title))}`);
     }
     if (node.base) {
       lines.push(
@@ -133,9 +132,7 @@ export const renderStatus = (
   const trunk = Terminal.paint(style, Terminal.color.dim, tree.trunk);
   lines.push(trunk);
   if (tree.roots.length === 0) return `${trunk}\n└─ (no matching stack branches)`;
-  tree.roots.forEach((root, index) =>
-    walk(root, "", index === tree.roots.length - 1),
-  );
+  tree.roots.forEach((root, index) => walk(root, "", index === tree.roots.length - 1));
   return lines.length > 0 ? lines.join("\n") : "(no matching stack branches)";
 };
 
@@ -162,8 +159,6 @@ export const renderDiagram = (report: StatusReport) => {
   };
 
   if (tree.roots.length === 0) return `${lines[0]}\n└─ (no open stack branches)`;
-  tree.roots.forEach((root, index) =>
-    walk(root, "", index === tree.roots.length - 1),
-  );
+  tree.roots.forEach((root, index) => walk(root, "", index === tree.roots.length - 1));
   return lines.join("\n");
 };

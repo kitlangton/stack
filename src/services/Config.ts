@@ -17,10 +17,9 @@ export interface StackConfigService {
   readonly githubWaitIntervalMillis: number;
 }
 
-export class StackConfig extends Context.Service<
-  StackConfig,
-  StackConfigService
->()("@stack/Config") {
+export class StackConfig extends Context.Service<StackConfig, StackConfigService>()(
+  "@stack/Config",
+) {
   static readonly layer = (opts: {
     root: string;
     store?: string;
@@ -35,10 +34,8 @@ export class StackConfig extends Context.Service<
         const path = yield* Path.Path;
         return StackConfig.of({
           root: opts.root,
-          store:
-            opts.store ?? path.join(opts.root, ".git", "stack", "state.json"),
-          journal:
-            opts.journal ?? path.join(opts.root, ".git", "stack", "undo.json"),
+          store: opts.store ?? path.join(opts.root, ".git", "stack", "state.json"),
+          journal: opts.journal ?? path.join(opts.root, ".git", "stack", "undo.json"),
           trunks: (opts.trunks ?? trunks).map((name) => branchName(name)),
           githubConcurrency: opts.githubConcurrency ?? 4,
           githubWaitIntervalMillis: opts.githubWaitIntervalMillis ?? 5_000,

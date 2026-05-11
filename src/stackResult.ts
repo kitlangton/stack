@@ -95,5 +95,4 @@ export const render = (item: StackResultItem) => {
   }
 };
 
-export const renderAll = (items: ReadonlyArray<StackResultItem>) =>
-  items.map(render);
+export const renderAll = (items: ReadonlyArray<StackResultItem>) => items.map(render);

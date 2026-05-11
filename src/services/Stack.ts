@@ -36,13 +36,8 @@ import { Store } from "./Store.ts";
 
 export interface StackService {
   readonly status: () => Effect.Effect<StatusReport, StackError>;
-  readonly adopt: (
-    branch: string,
-    parent: string,
-  ) => Effect.Effect<StackLink, StackError>;
-  readonly links: (
-    apply?: boolean,
-  ) => Effect.Effect<ReadonlyArray<string>, StackError>;
+  readonly adopt: (branch: string, parent: string) => Effect.Effect<StackLink, StackError>;
+  readonly links: (apply?: boolean) => Effect.Effect<ReadonlyArray<string>, StackError>;
   readonly land: (
     branch?: string,
     opts?: {
@@ -52,17 +47,12 @@ export interface StackService {
       readonly through?: string;
     },
   ) => Effect.Effect<ReadonlyArray<string>, StackError>;
-  readonly sync: (
-    opts?: { readonly dryRun?: boolean },
-  ) => Effect.Effect<ReadonlyArray<string>, StackError>;
+  readonly sync: (opts?: {
+    readonly dryRun?: boolean;
+  }) => Effect.Effect<ReadonlyArray<string>, StackError>;
   readonly doctor: () => Effect.Effect<ReadonlyArray<string>, StackError>;
-  readonly repair: (
-    apply?: boolean,
-  ) => Effect.Effect<ReadonlyArray<string>, StackError>;
   readonly last: () => Effect.Effect<ReadonlyArray<string>, StackError>;
-  readonly undo: (
-    apply?: boolean,
-  ) => Effect.Effect<ReadonlyArray<string>, StackError>;
+  readonly undo: (apply?: boolean) => Effect.Effect<ReadonlyArray<string>, StackError>;
 }
 
 export class Stack extends Context.Service<Stack, StackService>()("@stack/Stack") {
@@ -101,16 +91,13 @@ ${note}`;
       const clean = Effect.fn("Stack.clean")(() =>
         Effect.gen(function* () {
           const lines = yield* git.dirty();
-          if (lines.length > 0)
-            return yield* Effect.fail(new DirtyWorktreeError(lines));
+          if (lines.length > 0) return yield* Effect.fail(new DirtyWorktreeError(lines));
         }),
       );
 
       const trunk = (name: string) => cfg.trunks.some((item) => item === name);
-      const step = (message: string) =>
-        progress.emit({ _tag: "Step", message });
-      const wait = (message: string) =>
-        progress.emit({ _tag: "Wait", message });
+      const step = (message: string) => progress.emit({ _tag: "Step", message });
+      const wait = (message: string) => progress.emit({ _tag: "Wait", message });
       const mergeFailure = (err: unknown) =>
         new StackOperationError(
           `${err instanceof Error ? err.message : String(err)}\n\n` +
@@ -118,17 +105,158 @@ ${note}`;
             `If you intentionally want to bypass GitHub merge requirements with admin privileges, use: stack merge --apply --admin`,
         );
       const missingPull = (err: StackError) =>
-        err._tag === "ExecError" &&
-        /not found|could not resolve|no pull request/i.test(err.stderr);
+        err._tag === "ExecError" && /not found|could not resolve|no pull request/i.test(err.stderr);
+      const replayFailure = (
+        rebase: RepairPlan.RebaseBranchPlan,
+        err: StackError,
+        state: ReturnType<typeof stackState>,
+        pulls: ReadonlyArray<PullRef>,
+        actions: ReadonlyArray<StackResult.StackResultItem>,
+      ) =>
+        new StackOperationError(
+          [
+            ...renderSyncTree({
+              title: "Sync stopped",
+              state,
+              pulls,
+              actions,
+              mode: "apply",
+              failed: { branch: rebase.branch, parent: rebase.parent },
+            }),
+            "",
+            "Failed:",
+            `  ${rebase.branch} could not be replayed onto ${rebase.parent}`,
+            "",
+            "Cleaned up:",
+            `  backup created: ${rebase.backup}`,
+            "  the failed cherry-pick was aborted",
+            "  the original branch was restored",
+            "  the temporary replay branch was deleted",
+            "  the undo journal was saved",
+            "",
+            "Next:",
+            `  repair ${rebase.branch} from ${rebase.backup}, push it, then run: stack sync`,
+            "  or restore the pre-sync state with: stack undo --apply",
+            "",
+            "Git error:",
+            err instanceof Error ? `  ${err.message}` : `  ${String(err)}`,
+            err._tag === "ExecError" && err.stderr ? `  ${err.stderr}` : null,
+          ]
+            .filter((line): line is string => line !== null)
+            .join("\n"),
+        );
       const timestamp = Effect.fn("Stack.timestamp")(function* () {
         const now = yield* DateTime.nowAsDate;
         return now.toISOString().replaceAll(":", "").replaceAll(".", "");
       });
 
+      const renderSyncTree = (opts: {
+        readonly title: string;
+        readonly state: ReturnType<typeof stackState>;
+        readonly pulls: ReadonlyArray<PullRef>;
+        readonly actions: ReadonlyArray<StackResult.StackResultItem>;
+        readonly mode: StackResult.Mode;
+        readonly failed?: { readonly branch: string; readonly parent: string };
+      }) => {
+        const trunkNames = cfg.trunks.map(String);
+        const pulls = new Map(opts.pulls.map((pull) => [String(pull.head), pull]));
+        const children = new Map<string, Array<string>>();
+        const links = new Map(opts.state.links.map((link) => [String(link.branch), link]));
+        for (const link of opts.state.links) {
+          const parent = String(link.parent);
+          const list = children.get(parent) ?? [];
+          list.push(String(link.branch));
+          children.set(parent, list);
+        }
+        for (const list of children.values()) list.sort((a, b) => a.localeCompare(b));
+
+        const rebased = new Map<string, string>();
+        const pushed = new Set<string>();
+        const updatedPrs = new Set<number>();
+        let backups = 0;
+        for (const action of opts.actions) {
+          if (action._tag === "Rebase") rebased.set(action.branch, action.parent);
+          if (action._tag === "Push") pushed.add(action.branch);
+          if (action._tag === "Backup") backups += 1;
+          if (action._tag === "UpdateStackLinks") updatedPrs.add(action.pr);
+        }
+
+        const failedBranch = opts.failed?.branch ?? null;
+        const blocked = new Set<string>();
+        const collectBlocked = (branch: string) => {
+          for (const child of children.get(branch) ?? []) {
+            blocked.add(child);
+            collectBlocked(child);
+          }
+        };
+        if (failedBranch) collectBlocked(failedBranch);
+
+        const label = (branch: string) => {
+          const link = links.get(branch);
+          const pull = pulls.get(branch);
+          const pr = pull?.number ?? link?.pr ?? null;
+          return `${branch}${pr ? ` #${pr}` : ""}`;
+        };
+        const status = (branch: string) => {
+          if (failedBranch === branch) {
+            return {
+              icon: "✕",
+              note: `failed to rebase onto ${opts.failed?.parent}`,
+            };
+          }
+          if (blocked.has(branch)) return { icon: "◌", note: "not changed" };
+          const parent = rebased.get(branch);
+          if (parent) {
+            return opts.mode === "dry-run"
+              ? { icon: "◌", note: `would rebase onto ${parent}` }
+              : {
+                  icon: pushed.has(branch) ? "✓" : "◌",
+                  note: `rebased onto ${parent}`,
+                };
+          }
+          return { icon: "●", note: "" };
+        };
+
+        const trunkName =
+          trunkNames.find((name) => (children.get(name) ?? []).length > 0) ??
+          trunkNames[0] ??
+          "main";
+        const lines = [opts.title, "", `● ${trunkName}`];
+        const walk = (branch: string, prefix: string, last: boolean) => {
+          const item = status(branch);
+          lines.push(
+            `${prefix}${last ? "└─" : "├─"} ${item.icon} ${label(branch)}${item.note ? ` ${item.note}` : ""}`,
+          );
+          const kids = children.get(branch) ?? [];
+          kids.forEach((child, index) =>
+            walk(child, `${prefix}${last ? "   " : "│  "}`, index === kids.length - 1),
+          );
+        };
+        const roots = trunkNames.flatMap((name) => children.get(name) ?? []);
+        roots.forEach((root, index) => walk(root, "", index === roots.length - 1));
+        if (roots.length === 0) lines.push("└─ ◌ stack is current");
+
+        const summary = new Array<string>();
+        if (updatedPrs.size > 0) {
+          const verb = opts.mode === "dry-run" ? "Would update PRs" : "Updated PRs";
+          summary.push(
+            `${verb}: ${[...updatedPrs]
+              .sort((a, b) => a - b)
+              .map((pr) => `#${pr}`)
+              .join(", ")}`,
+          );
+        }
+        if (backups > 0 && opts.mode === "apply") summary.push(`Backups created: ${backups}`);
+        if (summary.length > 0) lines.push("", ...summary);
+        if (opts.mode === "dry-run") lines.push("", "Apply:", "  stack sync");
+        else if (!opts.failed && (backups > 0 || updatedPrs.size > 0)) {
+          lines.push("", "Undo:", "  stack undo --apply");
+        }
+        return lines;
+      };
+
       const githubPullBase = (remote: string) => {
-        const https = remote.match(
-          /^https:\/\/github\.com\/([^/]+)\/([^/.]+)(?:\.git)?$/,
-        );
+        const https = remote.match(/^https:\/\/github\.com\/([^/]+)\/([^/.]+)(?:\.git)?$/);
         if (https) return `https://github.com/${https[1]}/${https[2]}/pull`;
 
         const ssh = remote.match(/^git@github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/);
@@ -145,6 +273,12 @@ ${note}`;
             git.current(),
             git.remote(),
           ]);
+          const pulls = yield* github.pulls().pipe(
+            Effect.catchTags({
+              ExecError: () => Effect.succeed([]),
+              GitHubDecodeError: () => Effect.succeed([]),
+            }),
+          );
           const base = Option.isSome(remote) ? githubPullBase(remote.value) : null;
           const prUrls = new Map(
             state.links.flatMap((link) =>
@@ -154,7 +288,7 @@ ${note}`;
           return StackGraph.make({
             state,
             refs,
-            pulls: [],
+            pulls,
             prUrls,
             trunks: cfg.trunks,
             current,
@@ -187,36 +321,24 @@ ${note}`;
           }
 
           const base = yield* git.base(branch, parent);
-          if (Option.isNone(base))
-            return yield* Effect.fail(new MergeBaseError(branch, parent));
+          if (Option.isNone(base)) return yield* Effect.fail(new MergeBaseError(branch, parent));
 
-          const [state, pulls] = yield* Effect.all([
-            store.read(),
-            github.pulls(),
-          ]);
+          const [state, pulls] = yield* Effect.all([store.read(), github.pulls()]);
           const nextLinks = new Map(
             state.links
               .filter((link) => link.branch !== branch)
               .map((link) => [String(link.branch), String(link.parent)]),
           );
           if (
-            StackGraph.wouldCreateCycle(
-              nextLinks,
-              new Set(cfg.trunks.map(String)),
-              branch,
-              parent,
-            )
+            StackGraph.wouldCreateCycle(nextLinks, new Set(cfg.trunks.map(String)), branch, parent)
           ) {
             return yield* Effect.fail(
-              new StackOperationError(
-                `tracking ${branch} onto ${parent} would create a cycle`,
-              ),
+              new StackOperationError(`tracking ${branch} onto ${parent} would create a cycle`),
             );
           }
           const pr = pulls.find((pull) => pull.head === branch)?.number ?? null;
           const next = stackLink({ branch, parent, anchor: base.value, pr });
-          const prev =
-            state.links.find((link) => link.branch === branch) ?? null;
+          const prev = state.links.find((link) => link.branch === branch) ?? null;
           if (
             prev &&
             prev.parent === next.parent &&
@@ -228,9 +350,7 @@ ${note}`;
           const links = state.links.filter((link) => link.branch !== branch);
 
           yield* store.write(
-            stackState(
-              [...links, next].sort((a, b) => a.branch.localeCompare(b.branch)),
-            ),
+            stackState([...links, next].sort((a, b) => a.branch.localeCompare(b.branch))),
           );
 
           return next;
@@ -250,9 +370,7 @@ ${note}`;
             );
             const trunks = new Set(cfg.trunks.map(String));
             const childBases = new Set(
-              pulls
-                .map((pull) => String(pull.base))
-                .filter((base) => !trunks.has(base)),
+              pulls.map((pull) => String(pull.base)).filter((base) => !trunks.has(base)),
             );
             const planned = new Map(explicit);
             const actions: Array<StackLink> = [];
@@ -296,9 +414,7 @@ ${note}`;
           Effect.gen(function* () {
             const trunks = new Set(cfg.trunks.map(String));
             const refNames = new Set(refs.map((ref) => String(ref.name)));
-            const pullsByBranch = new Map(
-              pulls.map((pull) => [String(pull.head), pull]),
-            );
+            const pullsByBranch = new Map(pulls.map((pull) => [String(pull.head), pull]));
             const openBases = new Set(pulls.map((pull) => String(pull.base)));
             const actions: Array<StackResult.StackResultItem> = [];
             const kept = new Array<StackLink>();
@@ -368,9 +484,7 @@ ${note}`;
             }
 
             return {
-              state: stackState(
-                reconciled.sort((a, b) => a.branch.localeCompare(b.branch)),
-              ),
+              state: stackState(reconciled.sort((a, b) => a.branch.localeCompare(b.branch))),
               actions,
               replayAnchors,
             };
@@ -381,19 +495,12 @@ ${note}`;
         state: ReturnType<typeof stackState>,
         plan: ReadonlyArray<StackLink>,
       ) => {
-        const planned = new Map(
-          state.links.map((link) => [String(link.branch), link]),
-        );
+        const planned = new Map(state.links.map((link) => [String(link.branch), link]));
         for (const action of plan) {
-          planned.set(
-            String(action.branch),
-            action,
-          );
+          planned.set(String(action.branch), action);
         }
 
-        return stackState(
-          [...planned.values()].sort((a, b) => a.branch.localeCompare(b.branch)),
-        );
+        return stackState([...planned.values()].sort((a, b) => a.branch.localeCompare(b.branch)));
       };
 
       const repairStack = Effect.fn("Stack.repairStack")(
@@ -417,11 +524,8 @@ ${note}`;
             const initialActions = opts.initialActions ?? [];
             const mode: StackResult.Mode = apply ? "apply" : "dry-run";
             const stamp = yield* timestamp();
-            const actions: Array<StackResult.StackResultItem> =
-              Array.from(initialActions);
-            const links = new Map(
-              state.links.map((link) => [String(link.branch), link]),
-            );
+            const actions: Array<StackResult.StackResultItem> = Array.from(initialActions);
+            const links = new Map(state.links.map((link) => [String(link.branch), link]));
             const graph = StackGraph.make({
               state,
               refs,
@@ -431,9 +535,7 @@ ${note}`;
             });
 
             const live = new Map(refs.map((ref) => [String(ref.name), ref]));
-            const heads = new Map(
-              refs.map((ref) => [String(ref.name), ref.head]),
-            );
+            const heads = new Map(refs.map((ref) => [String(ref.name), ref.head]));
             const prs = new Map(pulls.map((pull) => [String(pull.head), pull]));
             const tips = new Map<string, string | null>();
             const prior = new Map<string, string>();
@@ -447,8 +549,7 @@ ${note}`;
                 .map((ref) => ref.name)
                 .filter(
                   (name) =>
-                    (name.startsWith("backup/landed-") ||
-                      name.startsWith("backup/stack-sync-")) &&
+                    (name.startsWith("backup/landed-") || name.startsWith("backup/stack-sync-")) &&
                     name.endsWith(`-${link.branch}`),
                 )
                 .sort()
@@ -460,22 +561,14 @@ ${note}`;
             const checkpoint = Effect.fn("Stack.repairStack.checkpoint")(() =>
               apply
                 ? store.writeUndo(
-                    undoState(
-                      stamp,
-                      journalState,
-                      entries,
-                      StackResult.renderAll(actions),
-                    ),
+                    undoState(stamp, journalState, entries, StackResult.renderAll(actions)),
                   )
                 : Effect.void,
             );
 
             if (journal) yield* checkpoint();
 
-            const resolve = (
-              name: string,
-              seen = new Set<string>(),
-            ): string | null => {
+            const resolve = (name: string, seen = new Set<string>()): string | null => {
               let parent = name;
               for (;;) {
                 if (live.has(parent) || trunk(parent)) return parent;
@@ -488,8 +581,7 @@ ${note}`;
             };
 
             for (const link of [...state.links].sort(
-              (a, b) =>
-                graph.rank(String(a.branch)) - graph.rank(String(b.branch)),
+              (a, b) => graph.rank(String(a.branch)) - graph.rank(String(b.branch)),
             )) {
               if (!live.has(String(link.branch))) {
                 if (!prs.has(String(link.branch))) continue;
@@ -501,23 +593,19 @@ ${note}`;
               if (!parent) {
                 next.push(link);
                 actions.push(
-                  StackResult.text(
-                    `skip ${link.branch}: cannot resolve parent ${link.parent}`,
-                  ),
+                  StackResult.text(`skip ${link.branch}: cannot resolve parent ${link.parent}`),
                 );
                 continue;
               }
 
               if (parent !== link.parent)
-                actions.push(
-                  {
-                    _tag: "Reparent",
-                    mode,
-                    branch: String(link.branch),
-                    from: String(link.parent),
-                    to: parent,
-                  },
-                );
+                actions.push({
+                  _tag: "Reparent",
+                  mode,
+                  branch: String(link.branch),
+                  from: String(link.parent),
+                  to: parent,
+                });
 
               const pr = prs.get(String(link.branch)) ?? null;
               const onto = trunk(parent) ? `origin/${parent}` : parent;
@@ -577,7 +665,11 @@ ${note}`;
                   yield* git.backup(rebase.branch, rebase.backup);
                   saved.set(rebase.branch, rebase.backup);
                   yield* step(`rebase ${rebase.branch} onto ${rebase.parent}`);
-                  yield* git.replay(rebase.branch, rebase.onto, rebase.commits);
+                  yield* git
+                    .replay(rebase.branch, rebase.onto, rebase.commits)
+                    .pipe(
+                      Effect.mapError((err) => replayFailure(rebase, err, state, pulls, actions)),
+                    );
                   yield* step(`push ${rebase.branch}`);
                   yield* git.push(rebase.branch);
                   const tip = yield* git.head(link.branch);
@@ -623,9 +715,7 @@ ${note}`;
                     ? yield* github
                         .pull(link.pr)
                         .pipe(
-                          Effect.catchIf(missingPull, () =>
-                            Effect.succeed<PullMeta | null>(null),
-                          ),
+                          Effect.catchIf(missingPull, () => Effect.succeed<PullMeta | null>(null)),
                         )
                     : null;
                   const nextPr = draft(link, parent, prev);
@@ -646,9 +736,7 @@ ${note}`;
                     pr: Number(made.number),
                   } satisfies RepairPlan.CreatePullPlan;
                   actions.push(RepairPlan.createPull(createdPull, mode));
-                  const i = entries.findIndex(
-                    (item) => item.branch === link.branch,
-                  );
+                  const i = entries.findIndex((item) => item.branch === link.branch);
                   if (i >= 0) {
                     entries[i] = undoEntry({
                       branch: entries[i]!.branch,
@@ -671,11 +759,16 @@ ${note}`;
                   journal = true;
                   yield* checkpoint();
                 } else {
-                  actions.push(RepairPlan.createPull({
-                    branch: String(link.branch),
-                    base: parent,
-                    pr: null,
-                  }, mode));
+                  actions.push(
+                    RepairPlan.createPull(
+                      {
+                        branch: String(link.branch),
+                        base: parent,
+                        pr: null,
+                      },
+                      mode,
+                    ),
+                  );
                 }
               } else {
                 num = open.number;
@@ -710,53 +803,34 @@ ${note}`;
               );
             }
 
+            const resultState = stackState(next.sort((a, b) => a.branch.localeCompare(b.branch)));
+
             if (apply && actions.length > 0) {
-              yield* store.write(
-                stackState(
-                  next.sort((a, b) => a.branch.localeCompare(b.branch)),
-                ),
-              );
+              yield* store.write(resultState);
             }
 
             if (apply && !journal) {
               yield* store.clearUndo();
             }
 
-            return actions.length > 0
-              ? StackResult.renderAll(actions)
-              : [apply ? "stack is current" : "would make no changes"];
+            return {
+              actions,
+              state: resultState,
+              lines:
+                actions.length > 0
+                  ? StackResult.renderAll(actions)
+                  : [apply ? "stack is current" : "would make no changes"],
+            };
           }),
-      );
-
-      const repair: StackService["repair"] = Effect.fn("Stack.repair")((apply = false) =>
-        Effect.gen(function* () {
-          const current = yield* git.current();
-          if (apply) yield* clean();
-          yield* git.fetch();
-          const [state, refs, pulls] = yield* Effect.all([
-            store.read(),
-            git.refs(),
-            github.pulls(),
-          ]);
-          const steps = yield* repairStack(state, refs, pulls, { apply });
-          const notes = apply ? yield* links(true) : Array<string>();
-          if (apply) yield* git.switch(current);
-          const view = apply ? yield* diagram() : Array<string>();
-          return [...steps, ...notes, ...view];
-        }),
       );
 
       const sync: StackService["sync"] = Effect.fn("Stack.sync")((opts) =>
         Effect.gen(function* () {
           const dryRun = opts?.dryRun ?? false;
-          const syncStep = (message: string) =>
-            dryRun ? Effect.void : step(message);
-          const current = yield* git.current();
+          const current = dryRun ? "" : yield* git.current();
           return yield* Effect.gen(function* () {
             if (!dryRun) yield* clean();
-            yield* syncStep("fetch origin --prune");
             yield* git.fetch();
-            yield* syncStep("inspect open PRs and local refs");
             const [state, refs, pulls] = yield* Effect.all([
               store.read(),
               git.refs(),
@@ -768,37 +842,37 @@ ${note}`;
               pulls,
               dryRun ? "dry-run" : "apply",
             );
-            yield* syncStep("reconcile local stack metadata");
             const plan = yield* inferApplyPlan(reconciled.state, refs, pulls);
-            yield* syncStep("infer PR-base stack links");
             const planned = stateWithPlan(reconciled.state, plan);
-            yield* syncStep("repair stack branches and PRs");
-            const steps = yield* repairStack(
-              planned,
-              refs,
-              pulls,
-              {
-                apply: !dryRun,
-                journalState: state,
-                replayAnchors: reconciled.replayAnchors,
-                initialActions: [
-                  ...reconciled.actions,
-                  ...plan.map(StackResult.track),
-                ],
-              },
-            );
-            yield* syncStep("refresh stack blocks");
+            const repair = yield* repairStack(planned, refs, pulls, {
+              apply: !dryRun,
+              journalState: state,
+              replayAnchors: reconciled.replayAnchors,
+              initialActions: [...reconciled.actions, ...plan.map(StackResult.track)],
+            });
             const notes = yield* linksFor(planned, !dryRun);
-            const view = dryRun ? Array<string>() : yield* diagram();
-            return [...steps, ...notes, ...view];
+            const mode: StackResult.Mode = dryRun ? "dry-run" : "apply";
+            const changed = repair.actions.length > 0 || notes.actions.length > 0;
+            if (!changed)
+              return renderSyncTree({
+                title: "Stack is current",
+                state: planned,
+                pulls,
+                actions: [],
+                mode,
+              });
+            return renderSyncTree({
+              title: dryRun ? "Sync preview" : "Synced stack",
+              state: repair.state,
+              pulls,
+              actions: [...repair.actions, ...notes.actions],
+              mode,
+            });
           }).pipe(
             Effect.ensuring(
               dryRun
                 ? Effect.void
-                : step(`restore branch ${current}`).pipe(
-                    Effect.flatMap(() => git.switch(current)),
-                    Effect.catchTag("ExecError", () => Effect.void),
-                  ),
+                : git.switch(current).pipe(Effect.catchTag("ExecError", () => Effect.void)),
             ),
           );
         }),
@@ -815,14 +889,13 @@ ${note}`;
               stateOverride ? Effect.succeed(stateOverride) : store.read(),
               github.pulls(),
             ]);
+            const prs = new Map(pulls.map((pull) => [String(pull.head), pull]));
             const info = yield* Effect.all(
               state.links
                 .map((link) => link.pr)
                 .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
                 .map((pr) =>
-                  github
-                    .pull(pr)
-                    .pipe(Effect.catchIf(missingPull, () => Effect.succeed(null))),
+                  github.pull(pr).pipe(Effect.catchIf(missingPull, () => Effect.succeed(null))),
                 ),
               { concurrency: cfg.githubConcurrency },
             );
@@ -836,7 +909,6 @@ ${note}`;
                 .filter((item): item is PullMeta => item !== null)
                 .map((item) => [Number(item.number), item]),
             );
-            const prs = new Map(pulls.map((pull) => [String(pull.head), pull]));
             const graph = StackGraph.make({
               state,
               refs: [],
@@ -850,8 +922,7 @@ ${note}`;
               .map((pull) =>
                 Effect.gen(function* () {
                   const meta =
-                    metasByNumber.get(Number(pull.number)) ??
-                    (yield* github.pull(pull.number));
+                    metasByNumber.get(Number(pull.number)) ?? (yield* github.pull(pull.number));
                   const next = StackBlock.splice(
                     meta.body,
                     StackBlock.render({
@@ -868,52 +939,44 @@ ${note}`;
                     yield* step(`update #${pull.number} stack block`);
                     yield* github.body(pull.number, next);
                   }
-                  return StackResult.render({
+                  return {
                     _tag: "UpdateStackLinks",
                     mode: apply ? "apply" : "dry-run",
                     pr: Number(pull.number),
-                  });
+                  } satisfies StackResult.StackResultItem;
                 }),
               );
 
             const items = yield* Effect.all(jobs, {
               concurrency: cfg.githubConcurrency,
             });
-            const actions = items.filter((item): item is string =>
-              Boolean(item),
-            );
-            return actions.length > 0
-              ? actions
-              : [
-                  apply
-                    ? "stack links are current"
-                    : "would make no description changes",
-                ];
+            const actions = items.filter((item): item is NonNullable<typeof item> => item !== null);
+            return {
+              actions,
+              lines:
+                actions.length > 0
+                  ? StackResult.renderAll(actions)
+                  : [apply ? "stack links are current" : "would make no description changes"],
+            };
           }),
       );
 
-      const links: StackService["links"] = Effect.fn("Stack.links")(
-        (apply = false) => linksFor(null, apply),
+      const links: StackService["links"] = Effect.fn("Stack.links")((apply = false) =>
+        linksFor(null, apply).pipe(Effect.map((result) => result.lines)),
       );
 
       const last = Effect.fn("Stack.last")(() =>
         Effect.gen(function* () {
           const run = yield* store.readUndo();
           if (!run) return ["no applied mutation recorded"];
-          const items =
-            run.actions.length > 0 ? run.actions : ["no actions recorded"];
-          return [
-            `last mutation: ${run.at}`,
-            ...items,
-            "undo with: stack undo --apply",
-          ];
+          const items = run.actions.length > 0 ? run.actions : ["no actions recorded"];
+          return [`last mutation: ${run.at}`, ...items, "undo with: stack undo --apply"];
         }),
       );
 
       const doctor: StackService["doctor"] = Effect.fn("Stack.doctor")(() =>
         Effect.gen(function* () {
-          const describe = (err: unknown) =>
-            err instanceof Error ? err.message : String(err);
+          const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
           const current = yield* git.current().pipe(
             Effect.match({
               onFailure: (err) => `fail current branch: ${describe(err)}`,
@@ -1025,9 +1088,7 @@ ${note}`;
             const throughIndex = chain.indexOf(throughBranch);
             if (throughIndex === -1 || throughIndex < targetIndex) {
               return yield* Effect.fail(
-                new StackOperationError(
-                  `${through} is not in the current stack from ${target}`,
-                ),
+                new StackOperationError(`${through} is not in the current stack from ${target}`),
               );
             }
             return throughBranch;
@@ -1054,16 +1115,13 @@ ${note}`;
               );
             }
             if (admin && !apply) {
-              return yield* Effect.fail(
-                new StackOperationError("use --admin only with --apply"),
-              );
+              return yield* Effect.fail(new StackOperationError("use --admin only with --apply"));
             }
             const active = apply || auto;
 
             if (active) yield* clean();
             const { state, refs, pulls, current, target } = yield* landTarget(branch);
-            const link =
-              state.links.find((item) => item.branch === target) ?? null;
+            const link = state.links.find((item) => item.branch === target) ?? null;
             if (!link) {
               const pr = pulls.find((item) => item.head === target) ?? null;
               if (!refs.some((item) => item.name === target) && !pr)
@@ -1077,26 +1135,20 @@ ${note}`;
             }
             if (!trunk(link.parent)) {
               return yield* Effect.fail(
-                new StackOperationError(
-                  `${target} is not the oldest branch in its stack`,
-                ),
+                new StackOperationError(`${target} is not the oldest branch in its stack`),
               );
             }
 
             const pr = pulls.find((item) => item.head === target) ?? null;
             if (!pr) {
-              return yield* Effect.fail(
-                new StackOperationError(`no open PR found for ${target}`),
-              );
+              return yield* Effect.fail(new StackOperationError(`no open PR found for ${target}`));
             }
 
             const root = cfg.trunks[0] ?? branchName("dev");
             const stamp = yield* timestamp();
             const name = `backup/landed-${stamp}-${target}`;
             const hasLocalTarget = refs.some((item) => item.name === target);
-            const next =
-              state.links.find((item) => item.parent === target)?.branch ??
-              null;
+            const next = state.links.find((item) => item.parent === target)?.branch ?? null;
             const landed = new Set([`#${pr.number}`, String(target)]);
             const preRetargets = state.links
               .filter((item) => item.parent === target)
@@ -1116,9 +1168,7 @@ ${note}`;
               preRetargets,
               (item) =>
                 Effect.gen(function* () {
-                  yield* step(
-                    `retarget #${item.pr} (${item.branch}) to ${item.base} before merge`,
-                  );
+                  yield* step(`retarget #${item.pr} (${item.branch}) to ${item.base} before merge`);
                   yield* github.edit(item.pr, item.base);
                 }),
               { discard: true },
@@ -1137,12 +1187,8 @@ ${note}`;
                 : item;
             });
             const actions = [
-              ...(current === target
-                ? [`${active ? "" : "would "}switch to ${root}`]
-                : []),
-              ...(hasLocalTarget
-                ? [`${active ? "" : "would "}backup ${target} -> ${name}`]
-                : []),
+              ...(current === target ? [`${active ? "" : "would "}switch to ${root}`] : []),
+              ...(hasLocalTarget ? [`${active ? "" : "would "}backup ${target} -> ${name}`] : []),
               ...preRetargets.map(
                 (item) =>
                   `${active ? "" : "would "}retarget #${item.pr} (${item.branch}) to ${item.base} before merge`,
@@ -1161,7 +1207,7 @@ ${note}`;
                   git.refs(),
                   github.pulls(),
                 ]);
-                const steps = yield* repairStack(
+                const repair = yield* repairStack(
                   nextState,
                   nextRefs.filter((item) => item.name !== target),
                   nextPulls.filter((item) => item.head !== target),
@@ -1171,7 +1217,7 @@ ${note}`;
                 if (current !== target) yield* git.switch(current);
                 const tail = next ? `next root: ${next}` : "next root: none";
                 const view = yield* diagram();
-                return [...actions, ...steps, ...notes, tail, ...view];
+                return [...actions, ...repair.lines, ...notes.lines, tail, ...view];
               }),
             );
 
@@ -1207,9 +1253,7 @@ ${note}`;
               }
               yield* retargetChildren;
               yield* step(`${admin ? "admin " : ""}merge #${pr.number} (${target})`);
-              yield* github.merge(pr.number, { admin }).pipe(
-                Effect.mapError(mergeFailure),
-              );
+              yield* github.merge(pr.number, { admin }).pipe(Effect.mapError(mergeFailure));
               if (hasLocalTarget) {
                 yield* step(`drop local ${target}`);
                 yield* git.drop(target);
@@ -1217,14 +1261,14 @@ ${note}`;
               return yield* repairAfterMerge();
             }
 
-            const steps = yield* repairStack(
+            const repair = yield* repairStack(
               state,
               refs.filter((item) => item.name !== target),
               plannedPulls.filter((item) => item.head !== target),
               { apply: false },
             );
             const tail = next ? `next root: ${next}` : "next root: none";
-            return [...actions, ...steps, tail];
+            return [...actions, ...repair.lines, tail];
           }),
       );
 
@@ -1234,9 +1278,7 @@ ${note}`;
 
         return Effect.gen(function* () {
           if (!opts?.auto) {
-            return yield* Effect.fail(
-              new StackOperationError("use --through only with --auto"),
-            );
+            return yield* Effect.fail(new StackOperationError("use --through only with --auto"));
           }
 
           const stop = yield* throughTarget(branch, through);
@@ -1267,9 +1309,7 @@ ${note}`;
           const actions: Array<string> = [];
           const trunk = cfg.trunks[0] ?? branchName("dev");
           const restore = new Set(
-            run.entries.flatMap((item) =>
-              item.backup ? [String(item.branch)] : [],
-            ),
+            run.entries.flatMap((item) => (item.backup ? [String(item.branch)] : [])),
           );
 
           if (restore.has(current)) {
@@ -1310,7 +1350,7 @@ ${note}`;
         }),
       );
 
-      return Stack.of({ status, adopt, links, land, sync, doctor, repair, last, undo });
+      return Stack.of({ status, adopt, links, land, sync, doctor, last, undo });
     }),
   );
 }

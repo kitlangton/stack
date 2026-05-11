@@ -13,17 +13,8 @@ export const color = {
   magenta: "\u001b[35m",
 } as const;
 
-export const paint = (
-  options: StyleOptions,
-  code: string,
-  value: string,
-) => (options.pretty ? `${code}${value}${color.reset}` : value);
+export const paint = (options: StyleOptions, code: string, value: string) =>
+  options.pretty ? `${code}${value}${color.reset}` : value;
 
-export const link = (
-  options: StyleOptions,
-  url: string | null,
-  value: string,
-) =>
-  options.pretty && url
-    ? `\u001b]8;;${url}\u0007${value}\u001b]8;;\u0007`
-    : value;
+export const link = (options: StyleOptions, url: string | null, value: string) =>
+  options.pretty && url ? `\u001b]8;;${url}\u0007${value}\u001b]8;;\u0007` : value;

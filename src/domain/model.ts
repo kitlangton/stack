@@ -1,10 +1,6 @@
 import * as Schema from "effect/Schema";
 
-export type Issue =
-  | "base-mismatch"
-  | "cycle"
-  | "inferred-parent"
-  | "missing-parent";
+export type Issue = "base-mismatch" | "cycle" | "inferred-parent" | "missing-parent";
 
 export type Source = "explicit" | "inferred" | "root";
 
@@ -37,6 +33,7 @@ export class BranchRef extends Schema.Class<BranchRef>("BranchRef")({
 
 export class PullRef extends Schema.Class<PullRef>("PullRef")({
   number: PrNumber,
+  title: Schema.NullOr(Schema.String),
   head: BranchName,
   base: BranchName,
   url: PullUrl,
@@ -94,6 +91,7 @@ export class StatusNode extends Schema.Class<StatusNode>("StatusNode")({
   parent: Schema.NullOr(BranchName),
   anchor: Schema.NullOr(Schema.String),
   pr: Schema.NullOr(PrNumber),
+  title: Schema.NullOr(Schema.String),
   url: Schema.NullOr(PullUrl),
   checks: Schema.NullOr(Schema.String),
   base: Schema.NullOr(BranchName),
@@ -166,14 +164,11 @@ export class BranchError extends Schema.TaggedErrorClass<BranchError>()("BranchE
   }
 }
 
-export class MergeBaseError extends Schema.TaggedErrorClass<MergeBaseError>()(
-  "MergeBaseError",
-  {
-    branch: Schema.String,
-    parent: Schema.String,
-    message: Schema.String,
-  },
-) {
+export class MergeBaseError extends Schema.TaggedErrorClass<MergeBaseError>()("MergeBaseError", {
+  branch: Schema.String,
+  parent: Schema.String,
+  message: Schema.String,
+}) {
   constructor(
     readonly branch: string,
     readonly parent: string,
@@ -192,9 +187,7 @@ export class DirtyWorktreeError extends Schema.TaggedErrorClass<DirtyWorktreeErr
   constructor(readonly lines: ReadonlyArray<string>) {
     super({
       lines: Array.from(lines),
-      message: lines.length > 0
-        ? `worktree is dirty:\n${lines.join("\n")}`
-        : "worktree is dirty",
+      message: lines.length > 0 ? `worktree is dirty:\n${lines.join("\n")}` : "worktree is dirty",
     });
   }
 }
@@ -252,6 +245,7 @@ export const branchRef = (value: { name: string; head: string }) =>
 
 export const pullRef = (value: {
   number: number;
+  title?: string | null;
   head: string;
   base: string;
   url: string;
@@ -260,6 +254,7 @@ export const pullRef = (value: {
 }) =>
   new PullRef({
     number: prNumber(value.number),
+    title: value.title ?? null,
     head: branchName(value.head),
     base: branchName(value.base),
     url: pullUrl(value.url),

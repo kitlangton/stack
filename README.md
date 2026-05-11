@@ -12,8 +12,8 @@ dev
 Squash-safe stacked PRs for GitHub repos that squash-merge and delete branches.
 
 `stack` preserves stack intent locally, infers obvious relationships from PR
-bases, and repairs descendants after each merge so open PRs keep their comments,
-reviews, and context.
+bases, and repairs descendants after parent changes or merges so open PRs keep
+their comments, reviews, and context.
 
 ## Install
 
@@ -39,19 +39,19 @@ gh pr create --base cleanup/schema-source --head cleanup/openapi-output
 stack sync --dry-run
 ```
 
-The preview shows what `stack` will infer and update:
+The preview summarizes the resulting stack:
 
 ```text
-→ fetch origin --prune
-→ inspect open PRs and local refs
-→ reconcile local stack metadata
-→ infer PR-base stack links
-→ preview repairs
-→ preview stack block updates
-infer link: cleanup/schema-source -> dev @ abc123
-infer link: cleanup/openapi-output -> cleanup/schema-source @ def456
-would update PR body: #101 Stack block
-would update PR body: #102 Stack block
+Sync preview
+
+● dev
+└─ ● cleanup/schema-source #101
+   └─ ● cleanup/openapi-output #102
+
+Would update PRs: #101, #102
+
+Apply:
+  stack sync
 ```
 
 Then sync it:
@@ -60,15 +60,20 @@ Then sync it:
 stack sync
 ```
 
-`stack sync` records the inferred links, refreshes each PR body, and prints the
-local stack:
+`stack sync` records the inferred links, refreshes each PR body, and prints a
+concise summary:
 
 ```text
-dev
-└─ cleanup/schema-source
-   PR: #101
-   └─ cleanup/openapi-output 👈 current
-      PR: #102
+Synced stack
+
+● dev
+└─ ● cleanup/schema-source #101
+   └─ ● cleanup/openapi-output #102
+
+Updated PRs: #101, #102
+
+Undo:
+  stack undo --apply
 ```
 
 Each PR gets a compact GitHub-native stack block:
@@ -121,3 +126,8 @@ stack merge --auto       # wait for GitHub requirements, then merge and repair
 stack merge --auto --through <branch-or-pr>
                           # auto-merge roots one at a time through a target
 ```
+
+When a parent PR branch changes, run `stack sync --dry-run` and then `stack sync`.
+If a descendant replay conflicts, `stack` aborts the failed cherry-pick, restores
+your starting branch, keeps backups and an undo journal, and prints the branch to
+repair manually before rerunning `stack sync`.

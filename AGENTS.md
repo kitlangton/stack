@@ -5,7 +5,7 @@
 - `stack` is a small, local-first CLI for stacked PR repair in squash-merge repos.
 - Use the latest Effect v4 beta / effect-smol APIs throughout this project.
 - Normal editing and commits stay plain git.
-- Stack commands are only for stack intent and repair.
+- Stack commands are only for stack intent, sync, merge, and undo workflows.
 
 ## Safety rules
 
@@ -17,15 +17,15 @@
 
 ## Current commands
 
-- `status` shows the local tracked stack without calling GitHub.
+- `status` shows the relevant tracked stack, including open PR titles when GitHub is available.
 - `guide` prints the opinionated happy path for agents and humans.
 - `track` records parentage for an existing branch only when PR bases do not already encode the stack.
-- `sync --dry-run` previews GitHub PR-base inference, stale metadata cleanup, and repairs without mutating branches, PRs, or stack metadata.
-- `sync` runs the common safe workflow: remove stale local links, infer clear PR-base stack links, repair branches, retarget PRs, and refresh links.
+- `sync --dry-run` previews GitHub PR-base inference, stale metadata cleanup, and repairs without mutating branches, PRs, or stack metadata using the tree summary output.
+- `sync` is the common safe workflow: remove stale local links, infer clear PR-base stack links, repair branches, retarget PRs, refresh links, and show a concise tree summary.
 - `sync` should not auto-track standalone trunk-root PRs; infer a trunk-root PR only when another open PR is based on it.
 - `merge` merges the oldest branch in a stack and immediately repairs descendants; when no branch is given, it infers the root from the current branch. It retargets immediate child PRs before merge to preserve open PRs in auto-delete repos.
 - `merge --auto` retargets immediate child PRs, enables GitHub auto-merge, waits for merge, then repairs descendants.
-- `repair` repairs missing parents, rebases descendants, and repairs PR bases from existing local stack metadata.
+- `merge --auto --through <branch-or-pr>` repeats root auto-merge and descendant repair until the target branch or PR has landed.
 - `history` explains the most recent applied sync from the undo journal.
 - `undo` restores the last applied sync.
 
@@ -39,9 +39,11 @@
 - Check the local Effect source tree when available before changing Effect APIs or versions.
 - Prefer `effect/Path`, `effect/FileSystem`, and `effect/unstable/process` instead of Node/Bun built-ins in app code.
 - Keep logic literal and debuggable over clever abstractions.
+- Default command output should be outcome-oriented: show the stack tree and changed/failed branches, not internal phases like fetch/inspect/reconcile.
 
 ## Verification
 
 - Run `bun run typecheck`.
 - Run `bun run test`.
+- Run `bun run format:check` and `bun run lint` when formatting or lint config is present.
 - When changing CLI docs or behavior, spot-check `bun src/cli.ts --help` and relevant subcommand help.

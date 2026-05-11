@@ -45,27 +45,19 @@ export const live = Layer.effect(
         Effect.gen(function* () {
           const handle = yield* spawner
             .spawn(cmd)
-            .pipe(
-              Effect.mapError(
-                (err) => new ExecError(tool, Array.from(args), 1, String(err)),
-              ),
-            );
+            .pipe(Effect.mapError((err) => new ExecError(tool, Array.from(args), 1, String(err))));
 
           const [stdout, stderr, exit] = yield* Effect.all([
             text(handle.stdout),
             text(handle.stderr),
             handle.exitCode.pipe(
-              Effect.mapError(
-                (err) => new ExecError(tool, Array.from(args), 1, String(err)),
-              ),
+              Effect.mapError((err) => new ExecError(tool, Array.from(args), 1, String(err))),
             ),
           ]);
 
           const code = Number(exit);
           if (!ok.includes(code)) {
-            return yield* Effect.fail(
-              new ExecError(tool, Array.from(args), code, stderr.trim()),
-            );
+            return yield* Effect.fail(new ExecError(tool, Array.from(args), code, stderr.trim()));
           }
 
           return stdout.trim();

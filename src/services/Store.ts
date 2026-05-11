@@ -5,13 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import {
-  stackState,
-  StackState,
-  type StoreError,
-  StateError,
-  UndoState,
-} from "../domain/model.ts";
+import { stackState, StackState, type StoreError, StateError, UndoState } from "../domain/model.ts";
 import { StackConfig } from "./Config.ts";
 
 export interface StoreService {
@@ -32,28 +26,16 @@ export class Store extends Context.Service<Store, StoreService>()("@stack/Store"
       const path = yield* Path.Path;
       const cfg = yield* StackConfig;
 
-      const load = <A>(
-        file: string,
-        miss: () => A,
-        parse: (raw: string) => A,
-      ) =>
+      const load = <A>(file: string, miss: () => A, parse: (raw: string) => A) =>
         Effect.gen(function* () {
           const has = yield* fs
             .exists(file)
-            .pipe(
-              Effect.mapError(
-                (err) => new StateError(file, "exists", String(err)),
-              ),
-            );
+            .pipe(Effect.mapError((err) => new StateError(file, "exists", String(err))));
           if (!has) return miss();
 
           const raw = yield* fs
             .readFileString(file)
-            .pipe(
-              Effect.mapError(
-                (err) => new StateError(file, "read", String(err)),
-              ),
-            );
+            .pipe(Effect.mapError((err) => new StateError(file, "read", String(err))));
 
           return yield* Effect.try({
             try: () => parse(raw),
@@ -65,28 +47,15 @@ export class Store extends Context.Service<Store, StoreService>()("@stack/Store"
         Effect.gen(function* () {
           yield* fs
             .makeDirectory(path.dirname(file), { recursive: true })
-            .pipe(
-              Effect.mapError(
-                (err) => new StateError(file, "mkdir", String(err)),
-              ),
-            );
+            .pipe(Effect.mapError((err) => new StateError(file, "mkdir", String(err))));
 
           yield* fs
-            .writeFileString(
-              file,
-              `${JSON.stringify(encode(value), null, 2)}\n`,
-            )
-            .pipe(
-              Effect.mapError(
-                (err) => new StateError(file, "write", String(err)),
-              ),
-            );
+            .writeFileString(file, `${JSON.stringify(encode(value), null, 2)}\n`)
+            .pipe(Effect.mapError((err) => new StateError(file, "write", String(err))));
         });
 
       const read = Effect.fn("Store.read")(() =>
-        load(cfg.store, empty, (raw) =>
-          Schema.decodeUnknownSync(StackState)(JSON.parse(raw)),
-        ),
+        load(cfg.store, empty, (raw) => Schema.decodeUnknownSync(StackState)(JSON.parse(raw))),
       );
 
       const write = Effect.fn("Store.write")((state: StackState) =>
@@ -106,9 +75,7 @@ export class Store extends Context.Service<Store, StoreService>()("@stack/Store"
       );
 
       const clearUndo = Effect.fn("Store.clearUndo")(() =>
-        fs.remove(cfg.journal).pipe(
-          Effect.catchTag("PlatformError", () => Effect.void),
-        ),
+        fs.remove(cfg.journal).pipe(Effect.catchTag("PlatformError", () => Effect.void)),
       );
 
       return Store.of({ read, write, readUndo, writeUndo, clearUndo });
@@ -123,16 +90,10 @@ export class Store extends Context.Service<Store, StoreService>()("@stack/Store"
         const undo = yield* Ref.make<UndoState | null>(null);
 
         const read = Effect.fn("Store.read")(() => Ref.get(ref));
-        const write = Effect.fn("Store.write")((next: StackState) =>
-          Ref.set(ref, next),
-        );
+        const write = Effect.fn("Store.write")((next: StackState) => Ref.set(ref, next));
         const readUndo = Effect.fn("Store.readUndo")(() => Ref.get(undo));
-        const writeUndo = Effect.fn("Store.writeUndo")((next: UndoState) =>
-          Ref.set(undo, next),
-        );
-        const clearUndo = Effect.fn("Store.clearUndo")(() =>
-          Ref.set(undo, null),
-        );
+        const writeUndo = Effect.fn("Store.writeUndo")((next: UndoState) => Ref.set(undo, next));
+        const clearUndo = Effect.fn("Store.clearUndo")(() => Ref.set(undo, null));
 
         return Store.of({ read, write, readUndo, writeUndo, clearUndo });
       }),

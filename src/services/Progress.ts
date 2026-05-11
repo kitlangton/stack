@@ -12,14 +12,9 @@ export interface Interface {
   readonly emit: (event: ProgressEvent) => Effect.Effect<void>;
 }
 
-export class Service extends Context.Service<Service, Interface>()(
-  "@stack/Progress",
-) {}
+export class Service extends Context.Service<Service, Interface>()("@stack/Progress") {}
 
-export const render = (
-  event: ProgressEvent,
-  options: Terminal.StyleOptions = {},
-) => {
+export const render = (event: ProgressEvent, options: Terminal.StyleOptions = {}) => {
   switch (event._tag) {
     case "Step":
       return `${Terminal.paint(options, Terminal.color.green, "→")} ${event.message}`;
@@ -28,10 +23,7 @@ export const render = (
   }
 };
 
-export const noop = Layer.succeed(
-  Service,
-  Service.of({ emit: () => Effect.void }),
-);
+export const noop = Layer.succeed(Service, Service.of({ emit: () => Effect.void }));
 
 export const live = Layer.succeed(
   Service,

@@ -10,12 +10,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
 import pkg from "../package.json" with { type: "json" };
-import {
-  BranchError,
-  DirtyWorktreeError,
-  ExecError,
-  MergeBaseError,
-} from "./domain/model.ts";
+import { BranchError, DirtyWorktreeError, ExecError, MergeBaseError } from "./domain/model.ts";
 import { renderStatus } from "./format.ts";
 import * as Proc from "./platform/proc.ts";
 import { StackConfig, trunks } from "./services/Config.ts";
@@ -27,9 +22,7 @@ import { Store } from "./services/Store.ts";
 
 const apply = Flag.boolean("apply").pipe(
   Flag.withAlias("y"),
-  Flag.withDescription(
-    "Apply the change. Without this flag the command is a dry run.",
-  ),
+  Flag.withDescription("Apply the change. Without this flag the command is a dry run."),
 );
 
 const auto = Flag.boolean("auto").pipe(
@@ -67,9 +60,9 @@ const guide = `Happy path for stacked PRs
 3. Apply only after the preview looks right.
    stack sync
 
-Use stack status to verify the relevant local tracked stack. It does not call
-GitHub, hides backup branches, and focuses on the current stack instead of
-listing every local branch.`;
+Use stack status to verify the relevant tracked stack. It hides backup branches,
+focuses on the current stack instead of listing every local branch, and includes
+open PR details when GitHub is available.`;
 
 const statusCommand = Command.make(
   "status",
@@ -81,7 +74,7 @@ const statusCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Show the local tracked stack without calling GitHub. Use sync --dry-run to preview PR-base inference.",
+    "Show the relevant tracked stack. Use sync --dry-run to preview PR-base inference and repairs.",
   ),
 );
 
@@ -109,9 +102,7 @@ const trackCommand = Command.make(
   Effect.fn(function* ({ branch, onto }) {
     const stack = yield* Stack;
     const link = yield* stack.adopt(branch, onto);
-    yield* Console.log(
-      `track ${link.branch} onto ${link.parent} @ ${link.anchor}`,
-    );
+    yield* Console.log(`track ${link.branch} onto ${link.parent} @ ${link.anchor}`);
   }),
 ).pipe(
   Command.withDescription(
@@ -121,31 +112,6 @@ const trackCommand = Command.make(
     {
       command: "stack track stack-c --onto stack-b",
       description: "Record that stack-c is stacked on stack-b",
-    },
-  ]),
-);
-
-const repairCommand = Command.make(
-  "repair",
-  { apply },
-  Effect.fn(function* ({ apply }) {
-    const stack = yield* Stack;
-    const items = yield* stack.repair(apply);
-    yield* Console.log(items.join("\n"));
-  }),
-).pipe(
-  Command.withDescription(
-    "Repair an already-tracked stack after squash merges or branch deletion. By default this is a dry run. Add --apply to actually run it.",
-  ),
-  Command.withExamples([
-    {
-      command: "stack repair",
-      description: "Preview repairs from local stack metadata",
-    },
-    {
-      command: "stack repair --apply",
-      description:
-        "Apply the planned repair using backups, rebases, pushes, and PR updates",
     },
   ]),
 );
@@ -210,7 +176,7 @@ const mergeCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Merge the oldest branch in a stack, preserve a local backup branch, repair descendants, and print the next root branch. If branch is omitted, infer the root from the current branch. By default this is a dry run. Add --apply to merge immediately, --apply --admin to force with admin privileges, or --auto to enable GitHub auto-merge and wait until it lands before repairing descendants. Add --auto --through <branch-or-pr> to repeat through a bounded range.",
+    "Merge the oldest branch in a stack, preserve a local backup branch, repair descendants, and print the next root branch. If branch is omitted, infer the root from the current branch. By default this is a dry run. Add --apply to merge immediately, --apply --admin to force with admin privileges, or --auto to enable GitHub auto-merge and wait until it lands before repairing descendants. Add --auto --through <branch-or-pr> for a bounded range.",
   ),
   Command.withExamples([
     {
@@ -223,23 +189,19 @@ const mergeCommand = Command.make(
     },
     {
       command: "stack merge effectify-watcher --apply",
-      description:
-        "Merge the root PR, repair descendants, and print the next root branch",
+      description: "Merge the root PR, repair descendants, and print the next root branch",
     },
     {
       command: "stack merge effectify-watcher --auto",
-      description:
-        "Wait for GitHub requirements, then merge and repair descendants",
+      description: "Wait for GitHub requirements, then merge and repair descendants",
     },
     {
       command: "stack merge --auto --through effectify-format",
-      description:
-        "Auto-merge roots one at a time until the target branch has landed",
+      description: "Auto-merge roots one at a time until the target branch has landed",
     },
     {
       command: "stack merge effectify-watcher --apply --admin",
-      description:
-        "Force-merge the root PR with admin privileges, then repair descendants",
+      description: "Force-merge the root PR with admin privileges, then repair descendants",
     },
   ]),
 );
@@ -254,7 +216,7 @@ const historyCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Show the most recent applied stack repair so you can see what changed and what `undo --apply` would restore.",
+    "Show the most recent applied stack mutation so you can see what changed and what `undo --apply` would restore.",
   ),
 );
 
@@ -277,15 +239,14 @@ const undoCommand = Command.make(
     },
     {
       command: "stack undo --apply",
-      description:
-        "Restore branch tips, PR bases, and metadata from the last mutation journal",
+      description: "Restore branch tips, PR bases, and metadata from the last mutation journal",
     },
   ]),
 );
 
 const cli = Command.make("stack").pipe(
   Command.withDescription(
-    "A squash-safe stacked PR CLI. Use plain git for normal editing and commits, then use stack to track branch relationships, inspect the graph, repair after squash merges, merge stack roots, and undo the last mutation if needed.",
+    "A squash-safe stacked PR CLI. Use plain git for normal editing and commits, then use stack to track branch relationships, inspect the graph, sync after parent changes, merge stack roots, and undo the last mutation if needed.",
   ),
   Command.withExamples([
     {
@@ -308,7 +269,6 @@ const cli = Command.make("stack").pipe(
     syncCommand,
     doctorCommand,
     mergeCommand,
-    repairCommand,
     historyCommand,
     undoCommand,
   ]),
@@ -323,23 +283,17 @@ const live = (() => {
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const proc = yield* Proc.Service;
-      const root = yield* proc.exec(process.cwd(), "git", [
-        "rev-parse",
-        "--show-toplevel",
-      ]).pipe(
-        Effect.catch((err) =>
-          Console.error(err.stderr).pipe(
-            Effect.flatMap(() =>
-              Effect.fail(new Error("not in a git repository")),
+      const root = yield* proc
+        .exec(process.cwd(), "git", ["rev-parse", "--show-toplevel"])
+        .pipe(
+          Effect.catch((err) =>
+            Console.error(err.stderr).pipe(
+              Effect.flatMap(() => Effect.fail(new Error("not in a git repository"))),
             ),
           ),
-        ),
-      );
+        );
 
-      const dir = yield* proc.exec(root, "git", [
-        "rev-parse",
-        "--git-common-dir",
-      ]);
+      const dir = yield* proc.exec(root, "git", ["rev-parse", "--git-common-dir"]);
       const git = path.isAbsolute(dir) ? dir : path.join(root, dir);
 
       return StackConfig.layer({
@@ -369,7 +323,6 @@ const docs = Layer.succeed(Stack, {
   land: () => Effect.die("help-only"),
   links: () => Effect.die("help-only"),
   sync: () => Effect.die("help-only"),
-  repair: () => Effect.die("help-only"),
   doctor: () => Effect.die("help-only"),
   last: () => Effect.die("help-only"),
   undo: () => Effect.die("help-only"),

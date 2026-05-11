@@ -823,7 +823,7 @@ ${note}`;
                     .pull(pr)
                     .pipe(Effect.catchIf(missingPull, () => Effect.succeed(null))),
                 ),
-              { concurrency: "unbounded" },
+              { concurrency: cfg.githubConcurrency },
             );
             const metas = new Map(
               info
@@ -875,7 +875,9 @@ ${note}`;
                 }),
               );
 
-            const items = yield* Effect.all(jobs, { concurrency: "unbounded" });
+            const items = yield* Effect.all(jobs, {
+              concurrency: cfg.githubConcurrency,
+            });
             const actions = items.filter((item): item is string =>
               Boolean(item),
             );

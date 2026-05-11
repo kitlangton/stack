@@ -212,7 +212,7 @@ export const layer = Layer.effect(
               );
             }
 
-            yield* Effect.sleep(5000);
+            yield* Effect.sleep(cfg.githubWaitIntervalMillis);
           }
         }),
       );

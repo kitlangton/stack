@@ -1,5 +1,11 @@
 # @kitlangton/stack
 
+## 0.1.4
+
+### Patch Changes
+
+- Improve sync output, remove the public repair command, and add oxlint/oxfmt checks.
+
 ## 0.1.3
 
 ### Patch Changes

@@ -3,6 +3,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import {
   BranchError,
   BranchRef,
@@ -49,6 +50,8 @@ export interface StackService {
   ) => Effect.Effect<ReadonlyArray<string>, StackError>;
   readonly sync: (opts?: {
     readonly dryRun?: boolean;
+    readonly branch?: string;
+    readonly continueOnFailure?: boolean;
   }) => Effect.Effect<ReadonlyArray<string>, StackError>;
   readonly doctor: () => Effect.Effect<ReadonlyArray<string>, StackError>;
   readonly last: () => Effect.Effect<ReadonlyArray<string>, StackError>;
@@ -254,6 +257,67 @@ ${note}`;
         }
         return lines;
       };
+
+      const scopedBranches = (state: ReturnType<typeof stackState>, root: string) => {
+        const children = new Map<string, Array<string>>();
+        for (const link of state.links) {
+          const parent = String(link.parent);
+          const list = children.get(parent) ?? [];
+          list.push(String(link.branch));
+          children.set(parent, list);
+        }
+
+        const branches = new Set<string>();
+        const visit = (branch: string) => {
+          if (branches.has(branch)) return;
+          branches.add(branch);
+          for (const child of children.get(branch) ?? []) visit(child);
+        };
+        visit(root);
+        return branches;
+      };
+
+      const filterState = (state: ReturnType<typeof stackState>, branches: ReadonlySet<string>) =>
+        stackState(state.links.filter((link) => branches.has(String(link.branch))));
+
+      const mergeState = (
+        state: ReturnType<typeof stackState>,
+        branches: ReadonlySet<string>,
+        scoped: ReturnType<typeof stackState>,
+      ) =>
+        stateWithPlan(
+          stackState(state.links.filter((link) => !branches.has(String(link.branch)))),
+          scoped.links,
+        );
+
+      const actionBranch = (action: StackResult.StackResultItem) => {
+        switch (action._tag) {
+          case "Text":
+          case "UpdateStackLinks":
+            return null;
+          case "Track":
+            return String(action.link.branch);
+          case "RemoveLink":
+          case "UpdateLink":
+          case "Reparent":
+          case "Backup":
+          case "Rebase":
+          case "Push":
+          case "CreatePull":
+            return action.branch;
+          case "RetargetPull":
+            return null;
+        }
+      };
+
+      const filterActions = (
+        actions: ReadonlyArray<StackResult.StackResultItem>,
+        branches: ReadonlySet<string>,
+      ) =>
+        actions.filter((action) => {
+          const branch = actionBranch(action);
+          return branch === null || branches.has(branch);
+        });
 
       const githubPullBase = (remote: string) => {
         const https = remote.match(/^https:\/\/github\.com\/([^/]+)\/([^/.]+)(?:\.git)?$/);
@@ -514,6 +578,10 @@ ${note}`;
             readonly journalState?: ReturnType<typeof stackState>;
             readonly initialActions?: ReadonlyArray<StackResult.StackResultItem>;
             readonly replayAnchors?: ReadonlyMap<string, string>;
+            readonly writeState?: (
+              state: ReturnType<typeof stackState>,
+            ) => Effect.Effect<void, StackError>;
+            readonly preserveUndo?: boolean;
           },
         ) =>
           Effect.gen(function* () {
@@ -806,16 +874,19 @@ ${note}`;
             const resultState = stackState(next.sort((a, b) => a.branch.localeCompare(b.branch)));
 
             if (apply && actions.length > 0) {
-              yield* store.write(resultState);
+              yield* (opts.writeState ?? store.write)(resultState);
             }
 
-            if (apply && !journal) {
+            if (apply && !journal && !opts.preserveUndo) {
               yield* store.clearUndo();
             }
 
             return {
               actions,
               state: resultState,
+              undo: journal
+                ? undoState(stamp, journalState, entries, StackResult.renderAll(actions))
+                : null,
               lines:
                 actions.length > 0
                   ? StackResult.renderAll(actions)
@@ -827,7 +898,9 @@ ${note}`;
       const sync: StackService["sync"] = Effect.fn("Stack.sync")((opts) =>
         Effect.gen(function* () {
           const dryRun = opts?.dryRun ?? false;
-          const current = dryRun ? "" : yield* git.current();
+          const requestedBranch = opts?.branch;
+          const continueOnFailure = opts?.continueOnFailure ?? false;
+          const current = requestedBranch && dryRun ? "" : yield* git.current();
           return yield* Effect.gen(function* () {
             if (!dryRun) yield* clean();
             yield* git.fetch();
@@ -844,30 +917,156 @@ ${note}`;
             );
             const plan = yield* inferApplyPlan(reconciled.state, refs, pulls);
             const planned = stateWithPlan(reconciled.state, plan);
-            const repair = yield* repairStack(planned, refs, pulls, {
-              apply: !dryRun,
-              journalState: state,
-              replayAnchors: reconciled.replayAnchors,
-              initialActions: [...reconciled.actions, ...plan.map(StackResult.track)],
-            });
-            const notes = yield* linksFor(planned, !dryRun);
             const mode: StackResult.Mode = dryRun ? "dry-run" : "apply";
-            const changed = repair.actions.length > 0 || notes.actions.length > 0;
-            if (!changed)
-              return renderSyncTree({
-                title: "Stack is current",
-                state: planned,
-                pulls,
-                actions: [],
-                mode,
-              });
-            return renderSyncTree({
-              title: dryRun ? "Sync preview" : "Synced stack",
-              state: repair.state,
+
+            const graph = StackGraph.make({
+              state: planned,
+              refs,
               pulls,
-              actions: [...repair.actions, ...notes.actions],
-              mode,
+              trunks: cfg.trunks,
+              current,
             });
+            const linked = new Set(planned.links.map((link) => String(link.branch)));
+            const resolveScope = (branch: string, explicit: boolean) => {
+              if (!linked.has(branch)) {
+                if (explicit) {
+                  return Effect.fail<StackOperationError>(
+                    new StackOperationError(`${branch} is not part of a tracked stack`),
+                  );
+                }
+                return Effect.succeed<{
+                  readonly root: string;
+                  readonly branches: ReadonlySet<string>;
+                } | null>(null);
+              }
+              const root = graph.rootOf(branch);
+              return Effect.succeed({ root, branches: scopedBranches(planned, root) });
+            };
+            const scope = requestedBranch
+              ? yield* resolveScope(requestedBranch, true)
+              : yield* resolveScope(current, false);
+
+            const initialActions = [...reconciled.actions, ...plan.map(StackResult.track)];
+
+            const syncScoped = Effect.fn("Stack.sync.scoped")(
+              (
+                target: { readonly root: string; readonly branches: ReadonlySet<string> } | null,
+                preserveUndo = false,
+              ) =>
+                Effect.gen(function* () {
+                  const scoped = target ? filterState(planned, target.branches) : planned;
+                  const scopedInitial = target
+                    ? filterActions(initialActions, target.branches)
+                    : initialActions;
+                  const replayAnchors = target
+                    ? new Map(
+                        [...reconciled.replayAnchors].filter(([branch]) =>
+                          target.branches.has(branch),
+                        ),
+                      )
+                    : reconciled.replayAnchors;
+                  const writeState = target
+                    ? (next: ReturnType<typeof stackState>) =>
+                        store
+                          .read()
+                          .pipe(
+                            Effect.flatMap((latest) =>
+                              store.write(mergeState(latest, target.branches, next)),
+                            ),
+                          )
+                    : undefined;
+                  const repair = yield* repairStack(scoped, refs, pulls, {
+                    apply: !dryRun,
+                    journalState: state,
+                    replayAnchors,
+                    initialActions: scopedInitial,
+                    ...(writeState ? { writeState } : {}),
+                    preserveUndo,
+                  });
+                  const notes = yield* linksFor(scoped, !dryRun, new Set(), pulls);
+                  const changed = repair.actions.length > 0 || notes.actions.length > 0;
+                  const lines = !changed
+                    ? renderSyncTree({
+                        title: "Stack is current",
+                        state: scoped,
+                        pulls,
+                        actions: [],
+                        mode,
+                      })
+                    : renderSyncTree({
+                        title: dryRun ? "Sync preview" : "Synced stack",
+                        state: repair.state,
+                        pulls,
+                        actions: [...repair.actions, ...notes.actions],
+                        mode,
+                      });
+                  return { lines, undo: repair.undo };
+                }),
+            );
+
+            if (requestedBranch || !continueOnFailure) {
+              const result = yield* syncScoped(scope);
+              return result.lines;
+            }
+
+            const roots = cfg.trunks
+              .flatMap((trunk) => planned.links.filter((link) => link.parent === trunk))
+              .map((link) => String(link.branch))
+              .sort((a, b) => a.localeCompare(b));
+            const succeeded = new Array<string>();
+            const failed = new Array<{ root: string; error: string }>();
+            const sections = new Array<string>();
+            const aggregateEntries = new Array<UndoEntry>();
+            const aggregateActions = new Array<string>();
+            let aggregateAt: string | null = null;
+
+            const rememberUndo = (run: ReturnType<typeof undoState> | null) => {
+              if (!run) return;
+              aggregateAt ??= String(run.at);
+              aggregateEntries.push(...run.entries);
+              aggregateActions.push(...run.actions);
+            };
+
+            for (const root of roots) {
+              const result = yield* Effect.result(
+                syncScoped({ root, branches: scopedBranches(planned, root) }, true),
+              );
+              if (Result.isSuccess(result)) {
+                succeeded.push(root);
+                if (sections.length > 0) sections.push("");
+                rememberUndo(result.success.undo);
+                sections.push(...result.success.lines);
+              } else {
+                rememberUndo(yield* store.readUndo());
+                failed.push({ root, error: String(result.failure) });
+              }
+
+              if (!dryRun && aggregateAt && aggregateEntries.length > 0) {
+                yield* store.writeUndo(
+                  undoState(aggregateAt, state, aggregateEntries, aggregateActions),
+                );
+              }
+            }
+
+            const summary = [
+              "Sync complete",
+              `${succeeded.length} ${succeeded.length === 1 ? "stack" : "stacks"} synced, ${failed.length} ${failed.length === 1 ? "stack" : "stacks"} failed`,
+            ];
+            if (succeeded.length > 0) {
+              summary.push("", "Succeeded:", ...succeeded.map((root) => `  ${root}`));
+            }
+            if (failed.length > 0) {
+              summary.push("", "Failed:");
+              for (const item of failed) {
+                summary.push(`  ${item.root}`, item.error);
+              }
+            }
+
+            const output = [...summary, ...(sections.length > 0 ? ["", ...sections] : [])];
+            if (failed.length > 0) {
+              return yield* Effect.fail(new StackOperationError(output.join("\n")));
+            }
+            return output;
           }).pipe(
             Effect.ensuring(
               dryRun
@@ -883,11 +1082,12 @@ ${note}`;
           stateOverride: ReturnType<typeof stackState> | null,
           apply = false,
           completed = new Set<string>(),
+          pullsOverride?: ReadonlyArray<PullRef>,
         ) =>
           Effect.gen(function* () {
             const [state, pulls] = yield* Effect.all([
               stateOverride ? Effect.succeed(stateOverride) : store.read(),
-              github.pulls(),
+              pullsOverride ? Effect.succeed(pullsOverride) : github.pulls(),
             ]);
             const prs = new Map(pulls.map((pull) => [String(pull.head), pull]));
             const info = yield* Effect.all(

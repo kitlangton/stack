@@ -120,6 +120,8 @@ the current PR:
 stack status             # local tracked stack, no GitHub API call
 stack sync --dry-run     # preview GitHub PR-base inference and repairs
 stack sync               # record inferred links, repair, and refresh PR bodies
+stack sync <branch>      # sync only the stack containing branch
+stack sync --keep-going  # process independent stacks and report failures at end
 stack merge              # dry-run the next root merge
 stack merge --apply      # merge root and repair descendants
 stack merge --auto       # wait for GitHub requirements, then merge and repair
@@ -128,6 +130,11 @@ stack merge --auto --through <branch-or-pr>
 ```
 
 When a parent PR branch changes, run `stack sync --dry-run` and then `stack sync`.
+From a stack branch, bare `stack sync` scopes to that stack; from off-stack it
+keeps the repo-wide behavior. Use `stack sync <branch>` to force one stack, or
+`stack sync --continue-on-failure` / `stack sync --keep-going` to process
+independent stacks and summarize any failures at the end.
+
 If a descendant replay conflicts, `stack` aborts the failed cherry-pick, restores
 your starting branch, keeps backups and an undo journal, and prints the branch to
 repair manually before rerunning `stack sync`.

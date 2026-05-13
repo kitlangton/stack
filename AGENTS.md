@@ -9,7 +9,7 @@
 
 ## Safety rules
 
-- `stack sync` must default to dry-run.
+- `stack sync --dry-run` must stay non-mutating, including scoped and keep-going runs.
 - History-rewriting commands need an explicit mutating mode: `--apply`, or `merge --auto` for GitHub auto-merge plus descendant repair.
 - Never mutate trunk branches like `dev`, `main`, or `master`.
 - Before rebasing a branch, create a local backup branch.
@@ -20,8 +20,10 @@
 - `status` shows the relevant tracked stack, including open PR titles when GitHub is available.
 - `guide` prints the opinionated happy path for agents and humans.
 - `track` records parentage for an existing branch only when PR bases do not already encode the stack.
-- `sync --dry-run` previews GitHub PR-base inference, stale metadata cleanup, and repairs without mutating branches, PRs, or stack metadata using the tree summary output.
-- `sync` is the common safe workflow: remove stale local links, infer clear PR-base stack links, repair branches, retarget PRs, refresh links, and show a concise tree summary.
+- `sync --dry-run [branch]` previews GitHub PR-base inference, stale metadata cleanup, and repairs without mutating branches, PRs, or stack metadata using the tree summary output.
+- `sync [branch]` is the common safe workflow: remove stale local links, infer clear PR-base stack links, repair branches, retarget PRs, refresh links, and show a concise tree summary. With a branch argument, sync only the stack containing that branch.
+- `sync` with no branch scopes to the current stack when the current branch is stack-relevant; when off-stack, it keeps the repo-wide behavior.
+- `sync --continue-on-failure` / `sync --keep-going` processes independent stacks, reports succeeded and failed stacks, preserves per-stack cleanup output, and exits nonzero if any stack failed.
 - `sync` should not auto-track standalone trunk-root PRs; infer a trunk-root PR only when another open PR is based on it.
 - `merge` merges the oldest branch in a stack and immediately repairs descendants; when no branch is given, it infers the root from the current branch. It retargets immediate child PRs before merge to preserve open PRs in auto-delete repos.
 - `merge --auto` retargets immediate child PRs, enables GitHub auto-merge, waits for merge, then repairs descendants.

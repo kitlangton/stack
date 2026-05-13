@@ -1396,6 +1396,100 @@ describe("Stack", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("sync branch argument scopes to the containing inferred stack", () => {
+    const seen: Array<string> = [];
+    const layer = stackTestLayer({
+      current: "dev",
+      refs: [
+        ref("dev", "aaa"),
+        ref("app-root", "app"),
+        ref("app-child", "app-child"),
+        ref("other-root", "other"),
+        ref("other-child", "other-child"),
+      ],
+      pulls: [
+        pr(1, "app-root", "dev"),
+        pr(2, "app-child", "app-root"),
+        pr(3, "other-root", "dev"),
+        pr(4, "other-child", "other-root"),
+      ],
+      bases: bases(
+        ["app-root", "dev", "aaa"],
+        ["app-child", "app-root", "app"],
+        ["other-root", "dev", "aaa"],
+        ["other-child", "other-root", "other"],
+      ),
+      service: {
+        body: (number) => Effect.sync(() => void seen.push(`body ${number}`)),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const store = yield* Store;
+      const items = yield* stack.sync({ branch: "app-root" });
+      const state = yield* store.read();
+
+      expect(items).toContain("Synced stack");
+      expect(items).toContain("└─ ● app-root #1");
+      expect(items).toContain("   └─ ● app-child #2");
+      expect(items.join("\n")).not.toContain("other-root");
+      expect(state.links.map((link) => String(link.branch))).toEqual(["app-child", "app-root"]);
+      expect([...seen].sort()).toEqual(["body 1", "body 2"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("sync without branch scopes to the current inferred stack", () => {
+    const layer = stackTestLayer({
+      current: "other-child",
+      refs: [
+        ref("dev", "aaa"),
+        ref("app-root", "app"),
+        ref("app-child", "app-child"),
+        ref("other-root", "other"),
+        ref("other-child", "other-child"),
+      ],
+      pulls: [
+        pr(1, "app-root", "dev"),
+        pr(2, "app-child", "app-root"),
+        pr(3, "other-root", "dev"),
+        pr(4, "other-child", "other-root"),
+      ],
+      bases: bases(
+        ["app-root", "dev", "aaa"],
+        ["app-child", "app-root", "app"],
+        ["other-root", "dev", "aaa"],
+        ["other-child", "other-root", "other"],
+      ),
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const items = yield* stack.sync({ dryRun: true });
+
+      expect(items).toContain("Sync preview");
+      expect(items).toContain("└─ ● other-root #3");
+      expect(items).toContain("   └─ ● other-child #4");
+      expect(items.join("\n")).not.toContain("app-root");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("sync branch argument rejects branches outside tracked stacks", () => {
+    const layer = stackTestLayer({
+      current: "dev",
+      refs: [ref("dev", "aaa"), ref("standalone", "alone")],
+      pulls: [pr(1, "standalone", "dev")],
+      bases: bases(["standalone", "dev", "aaa"]),
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const error = yield* Effect.flip(stack.sync({ branch: "standalone", dryRun: true }));
+
+      expect(String(error)).toContain("standalone is not part of a tracked stack");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("sync restores the current branch when link refresh fails", () => {
     const seen: Array<string> = [];
     const refs = [ref("dev", "dev-1"), ref("stack-a", "a-1"), ref("stack-b", "b-1")];
@@ -1419,6 +1513,88 @@ describe("Stack", () => {
 
       expect(failed).toContain("gh pr edit");
       expect(seen).toContain("switch stack-b");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("sync continue-on-failure processes independent stacks", () => {
+    const seen: Array<string> = [];
+    const refs = new Map([
+      ["dev", ref("dev", "dev-1")],
+      ["bad-root", ref("bad-root", "bad-new")],
+      ["bad-child", ref("bad-child", "bad-child-old")],
+      ["good-root", ref("good-root", "good-new")],
+      ["good-child", ref("good-child", "good-child-old")],
+    ]);
+    const baseMap = new Map([
+      ["bad-root:dev", "dev-1"],
+      ["bad-root:origin/dev", "dev-1"],
+      ["bad-child:bad-root", "bad-old"],
+      ["good-root:dev", "dev-1"],
+      ["good-root:origin/dev", "dev-1"],
+      ["good-child:good-root", "good-old"],
+    ]);
+    const layer = stackTestLayer({
+      current: "dev",
+      refs: [],
+      pulls: [
+        pr(1, "bad-root", "dev"),
+        pr(2, "bad-child", "bad-root"),
+        pr(3, "good-root", "dev"),
+        pr(4, "good-child", "good-root"),
+      ],
+      state: stackState([
+        stackLink({ branch: "bad-root", parent: "dev", anchor: "dev-1", pr: 1 }),
+        stackLink({ branch: "bad-child", parent: "bad-root", anchor: "bad-old", pr: 2 }),
+        stackLink({ branch: "good-root", parent: "dev", anchor: "dev-1", pr: 3 }),
+        stackLink({ branch: "good-child", parent: "good-root", anchor: "good-old", pr: 4 }),
+      ]),
+      service: {
+        refs: () => Effect.succeed([...refs.values()]),
+        head: (name) =>
+          Effect.succeed(
+            Option.fromNullishOr(
+              refs.get(name)?.head ??
+                (name.startsWith("origin/") ? refs.get(name.slice(7))?.head : undefined),
+            ),
+          ),
+        base: (branch, parent) =>
+          Effect.succeed(Option.fromNullishOr(baseMap.get(`${branch}:${parent}`))),
+        commits: (_from, branch) => Effect.succeed([`${branch}-commit`]),
+        replay: (branch, parent) =>
+          branch === "bad-child"
+            ? Effect.fail(new ExecError("git", ["cherry-pick"], 1, "conflict"))
+            : Effect.sync(() => {
+                seen.push(`rebase ${branch} ${parent}`);
+                refs.set(branch, ref(branch, `${branch}-new`));
+                baseMap.set(`${branch}:${parent}`, refs.get(parent)?.head ?? "");
+              }),
+        backup: (branch, name) => Effect.sync(() => void seen.push(`backup ${branch} ${name}`)),
+        push: (branch) => Effect.sync(() => void seen.push(`push ${branch}`)),
+        body: (number) => Effect.sync(() => void seen.push(`body ${number}`)),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const store = yield* Store;
+      const error = yield* Effect.flip(stack.sync({ continueOnFailure: true }));
+      const items = (error instanceof Error ? error.message : String(error)).split("\n");
+      const output = items.join("\n");
+      const undo = yield* store.readUndo();
+
+      expect(items).toContain("Sync complete");
+      expect(items).toContain("1 stack synced, 1 stack failed");
+      expect(items).toContain("  good-root");
+      expect(items).toContain("  bad-root");
+      expect(output).toContain("backup created: backup/stack-sync-");
+      expect(output).toContain("bad-child could not be replayed onto bad-root");
+      expect(seen).toContain("push good-child");
+      expect(seen).toContain("body 3");
+      expect(seen).toContain("body 4");
+      expect(undo?.entries.map((entry) => String(entry.branch)).sort()).toEqual([
+        "bad-child",
+        "good-child",
+      ]);
     }).pipe(Effect.provide(layer));
   });
 

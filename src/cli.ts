@@ -48,6 +48,13 @@ const dryRun = Flag.boolean("dry-run").pipe(
   Flag.withDescription("Preview the sync workflow without changing branches or PRs."),
 );
 
+const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
+  Flag.withAlias("keep-going"),
+  Flag.withDescription(
+    "Process every independent stack and report failures at the end instead of stopping on the first failure.",
+  ),
+);
+
 const guide = `Happy path for stacked PRs
 
 1. Create PRs with the right GitHub bases.
@@ -118,15 +125,24 @@ const trackCommand = Command.make(
 
 const syncCommand = Command.make(
   "sync",
-  { dryRun },
-  Effect.fn(function* ({ dryRun }) {
+  {
+    branch: Argument.string("branch").pipe(Argument.optional),
+    dryRun,
+    continueOnFailure,
+  },
+  Effect.fn(function* ({ branch, dryRun, continueOnFailure }) {
     const stack = yield* Stack;
-    const items = yield* stack.sync({ dryRun });
+    const branchValue = Option.getOrUndefined(branch);
+    const items = yield* stack.sync({
+      dryRun,
+      continueOnFailure,
+      ...(branchValue === undefined ? {} : { branch: branchValue }),
+    });
     yield* Console.log(items.join("\n"));
   }),
 ).pipe(
   Command.withDescription(
-    "Infer stack links from GitHub PR bases, clean stale metadata, repair branches, retarget PRs, and refresh stack links. Add --dry-run to preview without changing anything.",
+    "Infer stack links from GitHub PR bases, clean stale metadata, repair branches, retarget PRs, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. Add --dry-run to preview without changing anything.",
   ),
   Command.withExamples([
     {
@@ -134,8 +150,16 @@ const syncCommand = Command.make(
       description: "Preview inferred stack links and repairs without changing branches or PRs",
     },
     {
+      command: "stack sync effectify-watcher",
+      description: "Sync only the stack containing effectify-watcher",
+    },
+    {
       command: "stack sync",
       description: "Run the common stack maintenance workflow",
+    },
+    {
+      command: "stack sync --continue-on-failure",
+      description: "Sync independent stacks and summarize any failures at the end",
     },
   ]),
 );

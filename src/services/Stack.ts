@@ -104,11 +104,12 @@ ${note}`;
       const mergeFailure = (err: unknown) =>
         new StackOperationError(
           `${err instanceof Error ? err.message : String(err)}\n\n` +
-            `The PR did not merge immediately. If checks are still running or the PR is waiting on required reviews, use: stack merge --auto\n` +
-            `If you intentionally want to bypass GitHub merge requirements with admin privileges, use: stack merge --apply --admin`,
+            `The change did not merge immediately. If checks are still running or the change is waiting on required reviews, use: stack merge --auto\n` +
+            `If you intentionally want to bypass merge requirements with admin privileges (GitHub only), use: stack merge --apply --admin`,
         );
       const missingPull = (err: StackError) =>
-        err._tag === "ExecError" && /not found|could not resolve|no pull request/i.test(err.stderr);
+        err._tag === "ExecError" &&
+        /not found|could not resolve|no pull request|404/i.test(err.stderr);
       const replayFailure = (
         rebase: RepairPlan.RebaseBranchPlan,
         err: StackError,

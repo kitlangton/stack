@@ -37,7 +37,7 @@
 - Persist undo state in `.git/stack/undo.json`.
 - Prefer `Context.Service`-based Effect services and test-first changes.
 - Use OpenCode-style service modules for deep seams: export `Interface`, `Service`, and adapters like `layer`, `live`, or `memory`, then import them as namespaces.
-- Keep local Git behavior behind `Git` and pull-request behavior behind `GitHub`; stack orchestration should depend on both services rather than shelling out to `gh` directly.
+- Keep local Git behavior behind `Git` and change-request behavior behind `Forge`. Concrete forge backends live in `services/forge/github.ts` (via `gh`) and `services/forge/gitlab.ts` (via `glab`); the CLI picks the right one at startup from `STACK_FORGE` or the `origin` remote URL. Stack orchestration depends on `Forge.Service` rather than shelling out to a forge CLI directly.
 - Check the local Effect source tree when available before changing Effect APIs or versions.
 - Prefer `effect/Path`, `effect/FileSystem`, and `effect/unstable/process` instead of Node/Bun built-ins in app code.
 - Keep logic literal and debuggable over clever abstractions.

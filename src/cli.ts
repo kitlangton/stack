@@ -14,7 +14,9 @@ import { BranchError, DirtyWorktreeError, ExecError, MergeBaseError } from "./do
 import { renderStatus } from "./format.ts";
 import * as Proc from "./platform/proc.ts";
 import { StackConfig, trunks } from "./services/Config.ts";
+import * as Forge from "./services/Forge.ts";
 import * as ForgeGitHub from "./services/forge/github.ts";
+import * as ForgeGitLab from "./services/forge/gitlab.ts";
 import * as Git from "./services/Git.ts";
 import * as Progress from "./services/Progress.ts";
 import { Stack } from "./services/Stack.ts";
@@ -330,7 +332,19 @@ const live = (() => {
   ).pipe(Layer.provideMerge(proc));
 
   const git = Git.live.pipe(Layer.provide(cfg));
-  const forge = ForgeGitHub.layer.pipe(Layer.provide(cfg));
+  const forge = Layer.unwrap(
+    Effect.gen(function* () {
+      const proc = yield* Proc.Service;
+      const cfgValue = yield* StackConfig;
+      const remoteOut = yield* proc
+        .exec(cfgValue.root, "git", ["remote", "get-url", "origin"], [0, 1])
+        .pipe(Effect.catch(() => Effect.succeed("")));
+      const envKind = Forge.fromEnv(process.env.STACK_FORGE);
+      const detected = remoteOut ? (Forge.detect(remoteOut)?.kind ?? null) : null;
+      const kind = envKind ?? detected ?? "github";
+      return kind === "gitlab" ? ForgeGitLab.layer : ForgeGitHub.layer;
+    }),
+  ).pipe(Layer.provide(cfg));
   const store = Store.live.pipe(Layer.provideMerge(cfg));
   return Stack.layer.pipe(
     Layer.provideMerge(cfg),

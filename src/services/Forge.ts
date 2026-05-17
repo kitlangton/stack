@@ -36,19 +36,51 @@ export interface RemoteInfo {
 
 const trimGit = (value: string) => (value.endsWith(".git") ? value.slice(0, -4) : value);
 
-const matchGitHub = (remote: string): RemoteInfo | null => {
-  const https = remote.match(/^https:\/\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
-  if (https && https[1] === "github.com") {
-    return { kind: "github", host: https[1]!, owner: https[2]!, repo: trimGit(https[3]!) };
+const classify = (host: string): ForgeKind | null => {
+  if (host === "github.com") return "github";
+  if (host === "gitlab.com") return "gitlab";
+  if (host.includes("github")) return "github";
+  if (host.includes("gitlab")) return "gitlab";
+  return null;
+};
+
+const fromHostPath = (host: string, path: string): RemoteInfo | null => {
+  const kind = classify(host);
+  if (!kind) return null;
+  const trimmed = trimGit(path.replace(/^\/+/, "").replace(/\/+$/, ""));
+  const segments = trimmed.split("/").filter(Boolean);
+  if (segments.length < 2) return null;
+  const repo = segments[segments.length - 1]!;
+  const owner = segments.slice(0, -1).join("/");
+  return { kind, host, owner, repo };
+};
+
+export const detect = (remote: string): RemoteInfo | null => {
+  const https = remote.match(/^https?:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+?)\/?$/);
+  if (https) {
+    const info = fromHostPath(https[1]!, https[2]!);
+    if (info) return info;
   }
-  const ssh = remote.match(/^git@([^:]+):([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
-  if (ssh && ssh[1] === "github.com") {
-    return { kind: "github", host: ssh[1]!, owner: ssh[2]!, repo: trimGit(ssh[3]!) };
+  const sshUrl = remote.match(/^(?:ssh|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+?)\/?$/);
+  if (sshUrl) {
+    const info = fromHostPath(sshUrl[1]!, sshUrl[2]!);
+    if (info) return info;
+  }
+  const scp = remote.match(/^[^@\s]+@([^:]+):(.+?)\/?$/);
+  if (scp) {
+    const info = fromHostPath(scp[1]!, scp[2]!);
+    if (info) return info;
   }
   return null;
 };
 
-export const detect = (remote: string): RemoteInfo | null => matchGitHub(remote);
+export const fromEnv = (value: string | undefined): ForgeKind | null => {
+  if (!value) return null;
+  const lower = value.toLowerCase();
+  if (lower === "github") return "github";
+  if (lower === "gitlab") return "gitlab";
+  return null;
+};
 
 export const pullUrlBase = (info: RemoteInfo): string => {
   switch (info.kind) {

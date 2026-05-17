@@ -22,6 +22,7 @@ import * as StackGraph from "../src/stackGraph.ts";
 import { StackConfig } from "../src/services/Config.ts";
 import * as Forge from "../src/services/Forge.ts";
 import * as ForgeGitHub from "../src/services/forge/github.ts";
+import * as ForgeGitLab from "../src/services/forge/gitlab.ts";
 import * as Git from "../src/services/Git.ts";
 import * as Progress from "../src/services/Progress.ts";
 import { Stack } from "../src/services/Stack.ts";
@@ -2735,5 +2736,78 @@ describe("Stack", () => {
         yield* shell(repo, "git", ["rev-parse", "stack-b"]),
       );
     }).pipe(Effect.provide(platform)),
+  );
+});
+
+describe("Forge", () => {
+  it("detects github.com via https and ssh", () => {
+    expect(Forge.detect("https://github.com/owner/repo.git")).toEqual({
+      kind: "github",
+      host: "github.com",
+      owner: "owner",
+      repo: "repo",
+    });
+    expect(Forge.detect("git@github.com:owner/repo.git")).toEqual({
+      kind: "github",
+      host: "github.com",
+      owner: "owner",
+      repo: "repo",
+    });
+  });
+
+  it("detects gitlab.com and nested subgroups", () => {
+    expect(Forge.detect("https://gitlab.com/group/subgroup/repo.git")).toEqual({
+      kind: "gitlab",
+      host: "gitlab.com",
+      owner: "group/subgroup",
+      repo: "repo",
+    });
+    expect(Forge.detect("git@gitlab.com:group/repo.git")).toEqual({
+      kind: "gitlab",
+      host: "gitlab.com",
+      owner: "group",
+      repo: "repo",
+    });
+  });
+
+  it("detects self-hosted gitlab via hostname heuristic", () => {
+    expect(Forge.detect("https://gitlab.example.com/team/repo.git")?.kind).toBe("gitlab");
+    expect(Forge.detect("git@gitlab.internal:team/repo.git")?.kind).toBe("gitlab");
+    expect(Forge.detect("https://gh.enterprise.io/team/repo.git")).toBeNull();
+  });
+
+  it("synthesises pull/MR url bases per forge", () => {
+    expect(Forge.pullUrlBaseFor("https://github.com/owner/repo.git")).toBe(
+      "https://github.com/owner/repo/pull",
+    );
+    expect(Forge.pullUrlBaseFor("https://gitlab.com/group/repo.git")).toBe(
+      "https://gitlab.com/group/repo/-/merge_requests",
+    );
+    expect(Forge.pullUrlBaseFor("https://unknown.example/foo/bar.git")).toBeNull();
+  });
+
+  it("reads STACK_FORGE env override", () => {
+    expect(Forge.fromEnv(undefined)).toBeNull();
+    expect(Forge.fromEnv("")).toBeNull();
+    expect(Forge.fromEnv("github")).toBe("github");
+    expect(Forge.fromEnv("GITLAB")).toBe("gitlab");
+    expect(Forge.fromEnv("bitbucket")).toBeNull();
+  });
+
+  it.effect("gitlab memory layer satisfies Forge.Service", () =>
+    Effect.gen(function* () {
+      const forge = yield* Forge.Service;
+      const created = yield* forge.create("feature/x", "main", "title", "body", ["bug"]);
+      expect(String(created.head)).toBe("feature/x");
+      expect(String(created.base)).toBe("main");
+      const list = yield* forge.pulls();
+      expect(list).toHaveLength(1);
+      const meta = yield* forge.pull(created.number);
+      expect(String(meta.state)).toBe("opened");
+      expect(meta.labels.map((label) => label.name)).toEqual(["bug"]);
+      yield* forge.close(created.number);
+      const after = yield* forge.pulls();
+      expect(after).toHaveLength(0);
+    }).pipe(Effect.provide(ForgeGitLab.memory())),
   );
 });

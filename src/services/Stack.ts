@@ -31,7 +31,7 @@ import * as StackBlock from "../stackBlock.ts";
 import * as StackResult from "../stackResult.ts";
 import { StackConfig } from "./Config.ts";
 import * as Git from "./Git.ts";
-import * as GitHub from "./GitHub.ts";
+import * as Forge from "./Forge.ts";
 import * as Progress from "./Progress.ts";
 import { Store } from "./Store.ts";
 
@@ -64,9 +64,17 @@ export class Stack extends Context.Service<Stack, StackService>()("@stack/Stack"
     Effect.gen(function* () {
       const cfg = yield* StackConfig;
       const git = yield* Git.Service;
-      const github = yield* GitHub.Service;
+      const forge = yield* Forge.Service;
       const progress = yield* Progress.Service;
       const store = yield* Store;
+
+      const initialRemote = yield* git
+        .remote()
+        .pipe(Effect.catch(() => Effect.succeed(Option.none<string>())));
+      const forgeKind = Option.isSome(initialRemote)
+        ? (Forge.detect(initialRemote.value)?.kind ?? null)
+        : null;
+      const refPrefix = forgeKind === "gitlab" ? "!" : "#";
 
       const draft = (link: StackLink, parent: string, old: PullMeta | null) => {
         if (!old) {
@@ -104,11 +112,12 @@ ${note}`;
       const mergeFailure = (err: unknown) =>
         new StackOperationError(
           `${err instanceof Error ? err.message : String(err)}\n\n` +
-            `The PR did not merge immediately. If checks are still running or the PR is waiting on required reviews, use: stack merge --auto\n` +
-            `If you intentionally want to bypass GitHub merge requirements with admin privileges, use: stack merge --apply --admin`,
+            `The change did not merge immediately. If checks are still running or the change is waiting on required reviews, use: stack merge --auto\n` +
+            `If you intentionally want to bypass merge requirements with admin privileges (GitHub only), use: stack merge --apply --admin`,
         );
       const missingPull = (err: StackError) =>
-        err._tag === "ExecError" && /not found|could not resolve|no pull request/i.test(err.stderr);
+        err._tag === "ExecError" &&
+        /not found|could not resolve|no pull request|404/i.test(err.stderr);
       const replayFailure = (
         rebase: RepairPlan.RebaseBranchPlan,
         err: StackError,
@@ -174,12 +183,12 @@ ${note}`;
         for (const list of children.values()) list.sort((a, b) => a.localeCompare(b));
 
         const rebased = new Map<string, string>();
-        const pushed = new Set<string>();
+        const pushed = new Map<string, ReadonlyArray<string>>();
         const updatedPrs = new Set<number>();
         let backups = 0;
         for (const action of opts.actions) {
           if (action._tag === "Rebase") rebased.set(action.branch, action.parent);
-          if (action._tag === "Push") pushed.add(action.branch);
+          if (action._tag === "Push") pushed.set(action.branch, action.remotes);
           if (action._tag === "Backup") backups += 1;
           if (action._tag === "UpdateStackLinks") updatedPrs.add(action.pr);
         }
@@ -216,6 +225,14 @@ ${note}`;
                   icon: pushed.has(branch) ? "✓" : "◌",
                   note: `rebased onto ${parent}`,
                 };
+          }
+          const remotes = pushed.get(branch);
+          if (remotes) {
+            const remoteText =
+              remotes.length === 1 && remotes[0] === "origin" ? "" : ` to ${remotes.join(", ")}`;
+            return opts.mode === "dry-run"
+              ? { icon: "◌", note: `would push${remoteText}` }
+              : { icon: "✓", note: `pushed${remoteText}` };
           }
           return { icon: "●", note: "" };
         };
@@ -326,16 +343,6 @@ ${note}`;
           return branch === null || branches.has(branch);
         });
 
-      const githubPullBase = (remote: string) => {
-        const https = remote.match(/^https:\/\/github\.com\/([^/]+)\/([^/.]+)(?:\.git)?$/);
-        if (https) return `https://github.com/${https[1]}/${https[2]}/pull`;
-
-        const ssh = remote.match(/^git@github\.com:([^/]+)\/([^/.]+)(?:\.git)?$/);
-        if (ssh) return `https://github.com/${ssh[1]}/${ssh[2]}/pull`;
-
-        return null;
-      };
-
       const status: StackService["status"] = Effect.fn("Stack.status")(() =>
         Effect.gen(function* () {
           const [state, refs, current, remote] = yield* Effect.all([
@@ -344,13 +351,13 @@ ${note}`;
             git.current(),
             git.remote(),
           ]);
-          const pulls = yield* github.pulls().pipe(
+          const pulls = yield* forge.pulls().pipe(
             Effect.catchTags({
               ExecError: () => Effect.succeed([]),
-              GitHubDecodeError: () => Effect.succeed([]),
+              ForgeDecodeError: () => Effect.succeed([]),
             }),
           );
-          const base = Option.isSome(remote) ? githubPullBase(remote.value) : null;
+          const base = Option.isSome(remote) ? Forge.pullUrlBaseFor(remote.value) : null;
           const prUrls = new Map(
             state.links.flatMap((link) =>
               base && link.pr ? [[Number(link.pr), `${base}/${link.pr}`]] : [],
@@ -394,7 +401,7 @@ ${note}`;
           const base = yield* git.base(branch, parent);
           if (Option.isNone(base)) return yield* Effect.fail(new MergeBaseError(branch, parent));
 
-          const [state, pulls] = yield* Effect.all([store.read(), github.pulls()]);
+          const [state, pulls] = yield* Effect.all([store.read(), forge.pulls()]);
           const nextLinks = new Map(
             state.links
               .filter((link) => link.branch !== branch)
@@ -612,12 +619,66 @@ ${note}`;
             const live = new Map(refs.map((ref) => [String(ref.name), ref]));
             const heads = new Map(refs.map((ref) => [String(ref.name), ref.head]));
             const prs = new Map(pulls.map((pull) => [String(pull.head), pull]));
+            const childBases = new Set(pulls.map((pull) => String(pull.base)));
+            const remoteByRepository = new Map<string, string>(
+              (yield* git.remotes()).flatMap((remote): Array<[string, string]> => {
+                const info = Forge.detect(remote.url);
+                return info ? [[`${info.owner}/${info.repo}`, remote.name]] : [];
+              }),
+            );
             const tips = new Map<string, string | null>();
             const prior = new Map<string, string>();
             const moved = new Set<string>();
             const entries: Array<UndoEntry> = [];
             const next: Array<StackLink> = [];
             let journal = apply && initialActions.length > 0;
+
+            const headRemote = (pull: PullRef | null) => {
+              if (!pull?.headRepository) return Effect.succeed("origin");
+              const remote = remoteByRepository.get(pull.headRepository);
+              if (remote) return Effect.succeed(remote);
+              return Effect.fail(
+                new StackOperationError(
+                  `PR #${pull.number} head is ${pull.headRepository}, but no local git remote points to that repository`,
+                ),
+              );
+            };
+
+            const pushRemotes = Effect.fn("Stack.repairStack.pushRemotes")(function* (
+              branch: string,
+              pull: PullRef | null,
+            ) {
+              const remotes = new Set<string>([yield* headRemote(pull)]);
+              if (childBases.has(branch)) remotes.add("origin");
+              return [...remotes];
+            });
+
+            const stalePushRemotes = Effect.fn("Stack.repairStack.stalePushRemotes")(function* (
+              branch: string,
+              remotes: ReadonlyArray<string>,
+            ) {
+              const head = heads.get(branch);
+              if (!head) return [];
+              return yield* Effect.filter(remotes, (remote) =>
+                git
+                  .head(`${remote}/${branch}`)
+                  .pipe(
+                    Effect.map(
+                      (remoteHead) => Option.isSome(remoteHead) && remoteHead.value !== head,
+                    ),
+                  ),
+              );
+            });
+
+            const pushBranch = Effect.fn("Stack.repairStack.pushBranch")(function* (
+              branch: string,
+              remotes: ReadonlyArray<string>,
+            ) {
+              for (const remote of remotes) {
+                yield* step(remote === "origin" ? `push ${branch}` : `push ${branch} to ${remote}`);
+                yield* git.push(branch, remote);
+              }
+            });
 
             for (const link of state.links) {
               const match = refs
@@ -704,6 +765,7 @@ ${note}`;
               let backup: string | null = null;
               let created: number | null = null;
               let num = pr?.number ?? link.pr;
+              const targetRemotes = yield* pushRemotes(String(link.branch), pr);
 
               if (drift) {
                 const anchor = replayAnchors.get(String(link.branch));
@@ -721,6 +783,7 @@ ${note}`;
                   onto,
                   backup,
                   commits: commitsToReplay,
+                  pushRemotes: targetRemotes,
                 } satisfies RepairPlan.RebaseBranchPlan;
                 actions.push(...RepairPlan.rebaseBranch(rebase, mode));
 
@@ -745,8 +808,7 @@ ${note}`;
                     .pipe(
                       Effect.mapError((err) => replayFailure(rebase, err, state, pulls, actions)),
                     );
-                  yield* step(`push ${rebase.branch}`);
-                  yield* git.push(rebase.branch);
+                  yield* pushBranch(rebase.branch, rebase.pushRemotes);
                   const tip = yield* git.head(link.branch);
                   const head = Option.isSome(tip)
                     ? tip.value
@@ -758,6 +820,14 @@ ${note}`;
                 }
 
                 moved.add(link.branch);
+              } else {
+                const stale = pr?.headRepository
+                  ? yield* stalePushRemotes(String(link.branch), targetRemotes)
+                  : [];
+                if (stale.length > 0) {
+                  actions.push({ _tag: "Push", mode, branch: String(link.branch), remotes: stale });
+                  if (apply) yield* pushBranch(String(link.branch), stale);
+                }
               }
 
               const now = prs.get(link.branch) ?? null;
@@ -769,13 +839,14 @@ ${note}`;
                 actions.push(RepairPlan.retargetPull(retarget, mode));
                 if (apply) {
                   yield* step(`retarget #${now.number} to ${parent}`);
-                  yield* github.edit(now.number, parent);
+                  yield* forge.edit(now.number, parent);
                 }
                 prs.set(
                   link.branch,
                   pullRef({
                     number: now.number,
                     head: now.head,
+                    headRepository: now.headRepository,
                     base: parent,
                     url: now.url,
                     draft: now.draft,
@@ -787,7 +858,7 @@ ${note}`;
               if (!open) {
                 if (apply) {
                   const prev = link.pr
-                    ? yield* github
+                    ? yield* forge
                         .pull(link.pr)
                         .pipe(
                           Effect.catchIf(missingPull, () => Effect.succeed<PullMeta | null>(null)),
@@ -795,7 +866,7 @@ ${note}`;
                     : null;
                   const nextPr = draft(link, parent, prev);
                   yield* step(`create PR for ${link.branch} -> ${parent}`);
-                  const made = yield* github.create(
+                  const made = yield* forge.create(
                     link.branch,
                     parent,
                     nextPr.title,
@@ -914,7 +985,7 @@ ${note}`;
             const [state, refs, pulls] = yield* Effect.all([
               store.read(),
               git.refs(),
-              github.pulls(),
+              forge.pulls(),
             ]);
             const reconciled = yield* reconcileApplyState(
               state,
@@ -1093,7 +1164,7 @@ ${note}`;
           Effect.gen(function* () {
             const [state, pulls] = yield* Effect.all([
               stateOverride ? Effect.succeed(stateOverride) : store.read(),
-              pullsOverride ? Effect.succeed(pullsOverride) : github.pulls(),
+              pullsOverride ? Effect.succeed(pullsOverride) : forge.pulls(),
             ]);
             const prs = new Map(pulls.map((pull) => [String(pull.head), pull]));
             const info = yield* Effect.all(
@@ -1101,9 +1172,9 @@ ${note}`;
                 .map((link) => link.pr)
                 .filter((pr): pr is NonNullable<typeof pr> => pr !== null)
                 .map((pr) =>
-                  github.pull(pr).pipe(Effect.catchIf(missingPull, () => Effect.succeed(null))),
+                  forge.pull(pr).pipe(Effect.catchIf(missingPull, () => Effect.succeed(null))),
                 ),
-              { concurrency: cfg.githubConcurrency },
+              { concurrency: cfg.forgeConcurrency },
             );
             const metas = new Map(
               info
@@ -1128,7 +1199,7 @@ ${note}`;
               .map((pull) =>
                 Effect.gen(function* () {
                   const meta =
-                    metasByNumber.get(Number(pull.number)) ?? (yield* github.pull(pull.number));
+                    metasByNumber.get(Number(pull.number)) ?? (yield* forge.pull(pull.number));
                   const next = StackBlock.splice(
                     meta.body,
                     StackBlock.render({
@@ -1138,12 +1209,13 @@ ${note}`;
                       completed,
                       branch: String(pull.head),
                       previous: meta.body,
+                      refPrefix,
                     }),
                   );
                   if (next === meta.body) return null;
                   if (apply) {
                     yield* step(`update #${pull.number} stack block`);
-                    yield* github.body(pull.number, next);
+                    yield* forge.body(pull.number, next);
                   }
                   return {
                     _tag: "UpdateStackLinks",
@@ -1154,7 +1226,7 @@ ${note}`;
               );
 
             const items = yield* Effect.all(jobs, {
-              concurrency: cfg.githubConcurrency,
+              concurrency: cfg.forgeConcurrency,
             });
             const actions = items.filter((item): item is NonNullable<typeof item> => item !== null);
             return {
@@ -1212,7 +1284,7 @@ ${note}`;
                   : `warn missing local trunk branch: ${trunk}`,
               )
             : [`fail branch refs: ${describe(refs.err)}`];
-          const pulls = yield* github.pulls().pipe(
+          const pulls = yield* forge.pulls().pipe(
             Effect.match({
               onFailure: (err) => `fail open PRs: ${describe(err)}`,
               onSuccess: (pulls) => `ok open PRs visible: ${pulls.length}`,
@@ -1241,7 +1313,7 @@ ${note}`;
           const [state, refs, pulls, current] = yield* Effect.all([
             store.read(),
             git.refs(),
-            github.pulls(),
+            forge.pulls(),
             git.current(),
           ]);
           const graph = StackGraph.make({
@@ -1353,7 +1425,7 @@ ${note}`;
               return yield* Effect.fail(new StackOperationError(`no open PR found for ${target}`));
             }
 
-            const root = cfg.trunks[0] ?? branchName("dev");
+            const root = link.parent;
             const stamp = yield* timestamp();
             const name = `backup/landed-${stamp}-${target}`;
             const hasLocalTarget = refs.some((item) => item.name === target);
@@ -1378,7 +1450,7 @@ ${note}`;
               (item) =>
                 Effect.gen(function* () {
                   yield* step(`retarget #${item.pr} (${item.branch}) to ${item.base} before merge`);
-                  yield* github.edit(item.pr, item.base);
+                  yield* forge.edit(item.pr, item.base);
                 }),
               { discard: true },
             );
@@ -1388,6 +1460,7 @@ ${note}`;
                 ? pullRef({
                     number: item.number,
                     head: item.head,
+                    headRepository: item.headRepository,
                     base: retarget.base,
                     url: item.url,
                     draft: item.draft,
@@ -1414,7 +1487,7 @@ ${note}`;
                 const [nextState, nextRefs, nextPulls] = yield* Effect.all([
                   store.read(),
                   git.refs(),
-                  github.pulls(),
+                  forge.pulls(),
                 ]);
                 const scopedNextState = filterState(nextState, branches);
                 const repair = yield* repairStack(
@@ -1455,9 +1528,9 @@ ${note}`;
               }
               yield* retargetChildren;
               yield* step(`enable auto-merge #${pr.number} (${target})`);
-              yield* github.auto(pr.number);
+              yield* forge.auto(pr.number);
               yield* wait(`waiting for #${pr.number} to merge`);
-              yield* github.wait(pr.number);
+              yield* forge.wait(pr.number);
               if (hasLocalTarget) {
                 yield* step(`drop local ${target}`);
                 yield* git.drop(target);
@@ -1476,7 +1549,7 @@ ${note}`;
               }
               yield* retargetChildren;
               yield* step(`${admin ? "admin " : ""}merge #${pr.number} (${target})`);
-              yield* github.merge(pr.number, { admin }).pipe(Effect.mapError(mergeFailure));
+              yield* forge.merge(pr.number, { admin }).pipe(Effect.mapError(mergeFailure));
               if (hasLocalTarget) {
                 yield* step(`drop local ${target}`);
                 yield* git.drop(target);
@@ -1532,7 +1605,11 @@ ${note}`;
 
           const mode = apply ? "" : "would ";
           const actions: Array<string> = [];
-          const trunk = cfg.trunks[0] ?? branchName("dev");
+          const trunks = new Set(cfg.trunks.map(String));
+          const stateTrunk = run.state.links.find((link) =>
+            trunks.has(String(link.parent)),
+          )?.parent;
+          const trunk = stateTrunk ?? cfg.trunks[0] ?? branchName("dev");
           const restore = new Set(
             run.entries.flatMap((item) => (item.backup ? [String(item.branch)] : [])),
           );
@@ -1555,11 +1632,11 @@ ${note}`;
           for (const item of run.entries) {
             if (item.created) {
               actions.push(`${mode}close #${item.created}`);
-              if (apply) yield* github.close(item.created);
+              if (apply) yield* forge.close(item.created);
             }
             if (item.pr && item.base) {
               actions.push(`${mode}retarget #${item.pr} to ${item.base}`);
-              if (apply) yield* github.edit(item.pr, item.base);
+              if (apply) yield* forge.edit(item.pr, item.base);
             }
           }
 

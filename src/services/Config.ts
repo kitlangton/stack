@@ -13,8 +13,8 @@ export interface StackConfigService {
   readonly store: string;
   readonly journal: string;
   readonly trunks: ReadonlyArray<BranchName>;
-  readonly githubConcurrency: number;
-  readonly githubWaitIntervalMillis: number;
+  readonly forgeConcurrency: number;
+  readonly forgeWaitIntervalMillis: number;
 }
 
 export class StackConfig extends Context.Service<StackConfig, StackConfigService>()(
@@ -25,8 +25,8 @@ export class StackConfig extends Context.Service<StackConfig, StackConfigService
     store?: string;
     journal?: string;
     trunks?: ReadonlyArray<string>;
-    githubConcurrency?: number;
-    githubWaitIntervalMillis?: number;
+    forgeConcurrency?: number;
+    forgeWaitIntervalMillis?: number;
   }) =>
     Layer.effect(
       StackConfig,
@@ -37,8 +37,8 @@ export class StackConfig extends Context.Service<StackConfig, StackConfigService
           store: opts.store ?? path.join(opts.root, ".git", "stack", "state.json"),
           journal: opts.journal ?? path.join(opts.root, ".git", "stack", "undo.json"),
           trunks: (opts.trunks ?? trunks).map((name) => branchName(name)),
-          githubConcurrency: opts.githubConcurrency ?? 4,
-          githubWaitIntervalMillis: opts.githubWaitIntervalMillis ?? 5_000,
+          forgeConcurrency: opts.forgeConcurrency ?? 4,
+          forgeWaitIntervalMillis: opts.forgeWaitIntervalMillis ?? 5_000,
         });
       }),
     );

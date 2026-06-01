@@ -1,46 +1,25 @@
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import {
   ExecError,
-  GitHubDecodeError,
-  type GitHubError,
+  ForgeDecodeError,
   PullLabel,
   pullMeta,
   PullMeta,
   pullRef,
   PullRef,
-} from "../domain/model.ts";
-import * as Proc from "../platform/proc.ts";
-import { StackConfig } from "./Config.ts";
-
-export interface Interface {
-  readonly auto: (pr: number) => Effect.Effect<void, GitHubError>;
-  readonly merge: (
-    pr: number,
-    opts?: { readonly admin?: boolean },
-  ) => Effect.Effect<void, GitHubError>;
-  readonly wait: (pr: number) => Effect.Effect<void, GitHubError>;
-  readonly pulls: () => Effect.Effect<ReadonlyArray<PullRef>, GitHubError>;
-  readonly pull: (pr: number) => Effect.Effect<PullMeta, GitHubError>;
-  readonly edit: (pr: number, base: string) => Effect.Effect<void, GitHubError>;
-  readonly body: (pr: number, body: string) => Effect.Effect<void, GitHubError>;
-  readonly close: (pr: number) => Effect.Effect<void, GitHubError>;
-  readonly create: (
-    branch: string,
-    base: string,
-    title: string,
-    body: string,
-    labels: ReadonlyArray<string>,
-  ) => Effect.Effect<PullRef, GitHubError>;
-}
+} from "../../domain/model.ts";
+import * as Proc from "../../platform/proc.ts";
+import { StackConfig } from "../Config.ts";
+import * as Forge from "../Forge.ts";
 
 class PullData extends Schema.Class<PullData>("PullData")({
   number: Schema.Number,
   title: Schema.String,
   headRefName: Schema.String,
+  headRepository: Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String })),
   baseRefName: Schema.String,
   url: Schema.String,
   isDraft: Schema.Boolean,
@@ -51,6 +30,7 @@ class PullView extends Schema.Class<PullView>("PullView")({
   title: Schema.String,
   body: Schema.String,
   headRefName: Schema.String,
+  headRepository: Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String })),
   baseRefName: Schema.String,
   url: Schema.String,
   isDraft: Schema.Boolean,
@@ -71,25 +51,25 @@ const PullListJson = Schema.Array(PullData);
 const decodePullList = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
     try: () => Schema.decodeUnknownSync(PullListJson)(JSON.parse(out)),
-    catch: (err) => new GitHubDecodeError(args, out, String(err)),
+    catch: (err) => new ForgeDecodeError("gh", args, out, String(err)),
   });
 
 const decodePullView = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
     try: () => Schema.decodeUnknownSync(PullView)(JSON.parse(out)),
-    catch: (err) => new GitHubDecodeError(args, out, String(err)),
+    catch: (err) => new ForgeDecodeError("gh", args, out, String(err)),
   });
 
 const decodePullWatch = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
     try: () => Schema.decodeUnknownSync(PullWatch)(JSON.parse(out)),
-    catch: (err) => new GitHubDecodeError(args, out, String(err)),
+    catch: (err) => new ForgeDecodeError("gh", args, out, String(err)),
   });
 
 const decodePullData = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
     try: () => Schema.decodeUnknownSync(PullData)(JSON.parse(out)),
-    catch: (err) => new GitHubDecodeError(args, out, String(err)),
+    catch: (err) => new ForgeDecodeError("gh", args, out, String(err)),
   });
 
 const ref = (row: PullData) =>
@@ -97,6 +77,7 @@ const ref = (row: PullData) =>
     number: row.number,
     title: row.title,
     head: row.headRefName,
+    headRepository: row.headRepository?.nameWithOwner ?? null,
     base: row.baseRefName,
     url: row.url,
     draft: row.isDraft,
@@ -108,6 +89,7 @@ const meta = (row: PullView) =>
     title: row.title,
     body: row.body,
     head: row.headRefName,
+    headRepository: row.headRepository?.nameWithOwner ?? null,
     base: row.baseRefName,
     url: row.url,
     draft: row.isDraft,
@@ -115,46 +97,42 @@ const meta = (row: PullView) =>
     labels: row.labels.map((item) => new PullLabel({ name: item.name })),
   });
 
-export class Service extends Context.Service<Service, Interface>()("@stack/GitHub") {}
-
 export const layer = Layer.effect(
-  Service,
+  Forge.Service,
   Effect.gen(function* () {
     const cfg = yield* StackConfig;
     const proc = yield* Proc.Service;
 
-    const run = Effect.fn("GitHub.run")(function* (
+    const run = Effect.fn("Forge.github.run")(function* (
       args: ReadonlyArray<string>,
       ok: ReadonlyArray<number> = [0],
     ) {
       return yield* proc.exec(cfg.root, "gh", args, ok);
     });
 
-    const pulls = Effect.fn("GitHub.pulls")(function* () {
+    const pulls = Effect.fn("Forge.github.pulls")(function* () {
       const args = [
         "pr",
         "list",
         "--state",
         "open",
         "--json",
-        "number,title,headRefName,baseRefName,url,isDraft",
+        "number,title,headRefName,headRepository,baseRefName,url,isDraft",
         "--limit",
         "200",
       ];
       const out = yield* run(args);
-
       const rows = yield* decodePullList(args, out);
-
       return rows.map(ref);
     });
 
-    const pull = Effect.fn("GitHub.pull")((pr: number) => {
+    const pull = Effect.fn("Forge.github.pull")((pr: number) => {
       const args = [
         "pr",
         "view",
         `${pr}`,
         "--json",
-        "number,title,body,headRefName,baseRefName,url,isDraft,labels",
+        "number,title,body,headRefName,headRepository,baseRefName,url,isDraft,labels",
       ];
       return run(args).pipe(
         Effect.flatMap((out) => decodePullView(args, out)),
@@ -162,17 +140,18 @@ export const layer = Layer.effect(
       );
     });
 
-    const auto = Effect.fn("GitHub.auto")((pr: number) =>
+    const auto = Effect.fn("Forge.github.auto")((pr: number) =>
       run(["pr", "merge", `${pr}`, "--auto", "--squash"]).pipe(Effect.asVoid),
     );
 
-    const merge = Effect.fn("GitHub.merge")((pr: number, opts?: { readonly admin?: boolean }) =>
-      run(["pr", "merge", `${pr}`, "--squash", ...(opts?.admin ? ["--admin"] : [])]).pipe(
-        Effect.asVoid,
-      ),
+    const merge = Effect.fn("Forge.github.merge")(
+      (pr: number, opts?: { readonly admin?: boolean }) =>
+        run(["pr", "merge", `${pr}`, "--squash", ...(opts?.admin ? ["--admin"] : [])]).pipe(
+          Effect.asVoid,
+        ),
     );
 
-    const wait = Effect.fn("GitHub.wait")((pr: number) =>
+    const wait = Effect.fn("Forge.github.wait")((pr: number) =>
       Effect.gen(function* () {
         for (;;) {
           const args = ["pr", "view", `${pr}`, "--json", "state,mergedAt"];
@@ -186,24 +165,24 @@ export const layer = Layer.effect(
             );
           }
 
-          yield* Effect.sleep(cfg.githubWaitIntervalMillis);
+          yield* Effect.sleep(cfg.forgeWaitIntervalMillis);
         }
       }),
     );
 
-    const edit = Effect.fn("GitHub.edit")((pr: number, base: string) =>
+    const edit = Effect.fn("Forge.github.edit")((pr: number, base: string) =>
       run(["pr", "edit", `${pr}`, "--base", base]).pipe(Effect.asVoid),
     );
 
-    const body = Effect.fn("GitHub.body")((pr: number, body: string) =>
+    const body = Effect.fn("Forge.github.body")((pr: number, body: string) =>
       run(["pr", "edit", `${pr}`, "--body", body]).pipe(Effect.asVoid),
     );
 
-    const close = Effect.fn("GitHub.close")((pr: number) =>
+    const close = Effect.fn("Forge.github.close")((pr: number) =>
       run(["pr", "close", `${pr}`]).pipe(Effect.asVoid),
     );
 
-    const create = Effect.fn("GitHub.create")(function* (
+    const create = Effect.fn("Forge.github.create")(function* (
       branch: string,
       base: string,
       title: string,
@@ -229,16 +208,15 @@ export const layer = Layer.effect(
         "view",
         branch,
         "--json",
-        "number,title,headRefName,baseRefName,url,isDraft",
+        "number,title,headRefName,headRepository,baseRefName,url,isDraft",
       ];
       const out = yield* run(args);
-
       const row = yield* decodePullData(args, out);
 
       return ref(row);
     });
 
-    return Service.of({
+    return Forge.Service.of({
       auto,
       merge,
       wait,
@@ -260,7 +238,7 @@ export const memory = (
   } = {},
 ) =>
   Layer.effect(
-    Service,
+    Forge.Service,
     Effect.gen(function* () {
       const pullsRef = yield* Ref.make(Array.from(opts.pulls ?? []));
       const metasRef = yield* Ref.make(
@@ -269,8 +247,8 @@ export const memory = (
       let next = Math.max(0, ...Array.from(opts.pulls ?? [], (p) => p.number)) + 1;
       const record = (line: string) => Effect.sync(() => opts.log?.push(line));
 
-      const pulls = Effect.fn("GitHub.memory.pulls")(() => Ref.get(pullsRef));
-      const pull = Effect.fn("GitHub.memory.pull")((pr: number) =>
+      const pulls = Effect.fn("Forge.github.memory.pulls")(() => Ref.get(pullsRef));
+      const pull = Effect.fn("Forge.github.memory.pull")((pr: number) =>
         Ref.get(metasRef).pipe(
           Effect.flatMap((metas) => {
             const meta = metas.get(pr);
@@ -285,6 +263,7 @@ export const memory = (
                         title: `stack: ${found.head}`,
                         body: "",
                         head: found.head,
+                        headRepository: found.headRepository,
                         base: found.base,
                         url: found.url,
                         draft: found.draft,
@@ -298,7 +277,7 @@ export const memory = (
           }),
         ),
       );
-      const edit = Effect.fn("GitHub.memory.edit")((pr: number, base: string) =>
+      const edit = Effect.fn("Forge.github.memory.edit")((pr: number, base: string) =>
         Effect.gen(function* () {
           yield* record(`edit ${pr} ${base}`);
           yield* Ref.update(pullsRef, (pulls) =>
@@ -308,6 +287,7 @@ export const memory = (
                     number: item.number,
                     title: item.title,
                     head: item.head,
+                    headRepository: item.headRepository,
                     base,
                     url: item.url,
                     draft: item.draft,
@@ -317,7 +297,7 @@ export const memory = (
           );
         }),
       );
-      const body = Effect.fn("GitHub.memory.body")((pr: number, body: string) =>
+      const body = Effect.fn("Forge.github.memory.body")((pr: number, body: string) =>
         Effect.gen(function* () {
           yield* record(`body ${pr}`);
           yield* Ref.update(metasRef, (metas) => {
@@ -331,6 +311,7 @@ export const memory = (
                   title: current.title,
                   body,
                   head: current.head,
+                  headRepository: current.headRepository,
                   base: current.base,
                   url: current.url,
                   draft: current.draft,
@@ -343,7 +324,7 @@ export const memory = (
           });
         }),
       );
-      const create = Effect.fn("GitHub.memory.create")(function* (
+      const create = Effect.fn("Forge.github.memory.create")(function* (
         branch: string,
         base: string,
         title: string,
@@ -379,22 +360,22 @@ export const memory = (
         );
         return made;
       });
-      const close = Effect.fn("GitHub.memory.close")((pr: number) =>
+      const close = Effect.fn("Forge.github.memory.close")((pr: number) =>
         Effect.gen(function* () {
           yield* record(`close ${pr}`);
           yield* Ref.update(pullsRef, (pulls) => pulls.filter((item) => item.number !== pr));
         }),
       );
-      const merge = Effect.fn("GitHub.memory.merge")((pr: number) =>
+      const merge = Effect.fn("Forge.github.memory.merge")((pr: number) =>
         Effect.gen(function* () {
           yield* record(`merge ${pr}`);
           yield* Ref.update(pullsRef, (pulls) => pulls.filter((item) => item.number !== pr));
         }),
       );
-      const auto = Effect.fn("GitHub.memory.auto")((pr: number) => record(`auto ${pr}`));
-      const wait = Effect.fn("GitHub.memory.wait")((pr: number) => record(`wait ${pr}`));
+      const auto = Effect.fn("Forge.github.memory.auto")((pr: number) => record(`auto ${pr}`));
+      const wait = Effect.fn("Forge.github.memory.wait")((pr: number) => record(`wait ${pr}`));
 
-      return Service.of({
+      return Forge.Service.of({
         auto,
         merge,
         wait,

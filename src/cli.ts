@@ -14,8 +14,10 @@ import { BranchError, DirtyWorktreeError, ExecError, MergeBaseError } from "./do
 import { renderStatus } from "./format.ts";
 import * as Proc from "./platform/proc.ts";
 import { StackConfig, trunks } from "./services/Config.ts";
+import * as Forge from "./services/Forge.ts";
+import * as ForgeGitHub from "./services/forge/github.ts";
+import * as ForgeGitLab from "./services/forge/gitlab.ts";
 import * as Git from "./services/Git.ts";
-import * as GitHub from "./services/GitHub.ts";
 import * as Progress from "./services/Progress.ts";
 import { Stack } from "./services/Stack.ts";
 import { Store } from "./services/Store.ts";
@@ -27,25 +29,25 @@ const apply = Flag.boolean("apply").pipe(
 
 const auto = Flag.boolean("auto").pipe(
   Flag.withDescription(
-    "Enable GitHub auto-merge for the root PR, wait until it merges, then repair descendants automatically.",
+    "Enable forge-native auto-merge for the root change, wait until it merges, then repair descendants automatically.",
   ),
 );
 
 const admin = Flag.boolean("admin").pipe(
   Flag.withDescription(
-    "Use GitHub administrator privileges to merge immediately. Requires --apply.",
+    "Use administrator privileges to merge immediately, bypassing protection rules. Requires --apply. GitHub only; ignored on forges without an admin merge.",
   ),
 );
 
 const through = Flag.string("through").pipe(
   Flag.withDescription(
-    "With --auto, keep merging stack roots until this branch or PR number has landed.",
+    "With --auto, keep merging stack roots until this branch or change number has landed.",
   ),
   Flag.optional,
 );
 
 const dryRun = Flag.boolean("dry-run").pipe(
-  Flag.withDescription("Preview the sync workflow without changing branches or PRs."),
+  Flag.withDescription("Preview the sync workflow without changing branches or changes."),
 );
 
 const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
@@ -55,11 +57,11 @@ const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
   ),
 );
 
-const guide = `Happy path for stacked PRs
+const guide = `Happy path for stacked changes (GitHub PRs / GitLab MRs)
 
-1. Create PRs with the right GitHub bases.
-   - Root PR: base is trunk, for example dev or main.
-   - Child PR: base is the parent branch.
+1. Open the changes with the right target branches.
+   - Root change: target is trunk, for example dev or main.
+   - Child change: target is the parent branch.
 
 2. Preview what stack will infer and repair.
    stack sync --dry-run
@@ -68,8 +70,12 @@ const guide = `Happy path for stacked PRs
    stack sync
 
 Use stack status to verify the relevant tracked stack. It hides backup branches,
-focuses on the current stack instead of listing every local branch, and includes
-open PR details when GitHub is available.`;
+focuses on the current stack instead of listing every local branch, and
+includes open change details when the forge CLI (gh or glab) is available.
+
+Forge selection: STACK_FORGE=github or STACK_FORGE=gitlab overrides; otherwise
+the origin remote URL is inspected (github.com, gitlab.com, and self-hosted
+hosts whose hostname contains github or gitlab).`;
 
 const statusCommand = Command.make(
   "status",
@@ -113,7 +119,7 @@ const trackCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Manually record stack intent only when PR bases do not already encode the stack.",
+    "Manually record stack intent only when change target branches do not already encode the stack.",
   ),
   Command.withExamples([
     {
@@ -142,7 +148,7 @@ const syncCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Infer stack links from GitHub PR bases, clean stale metadata, repair branches, retarget PRs, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. Add --dry-run to preview without changing anything.",
+    "Infer stack links from the forge's target branches (GitHub PRs / GitLab MRs), clean stale metadata, repair branches, retarget changes, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. Add --dry-run to preview without changing anything.",
   ),
   Command.withExamples([
     {
@@ -174,7 +180,7 @@ const doctorCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Check local Git, GitHub, stack metadata, trunk branches, and undo journal health without changing anything.",
+    "Check local Git, forge (GitHub or GitLab), stack metadata, trunk branches, and undo journal health without changing anything.",
   ),
 );
 
@@ -200,7 +206,7 @@ const mergeCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Merge the oldest branch in a stack, preserve a local backup branch, repair descendants, and print the next root branch. If branch is omitted, infer the root from the current branch. By default this is a dry run. Add --apply to merge immediately, --apply --admin to force with admin privileges, or --auto to enable GitHub auto-merge and wait until it lands before repairing descendants. Add --auto --through <branch-or-pr> for a bounded range.",
+    "Merge the oldest branch in a stack, preserve a local backup branch, repair descendants, and print the next root branch. If branch is omitted, infer the root from the current branch. By default this is a dry run. Add --apply to merge immediately, --apply --admin to force with admin privileges (GitHub only), or --auto to enable forge-native auto-merge (gh's --auto / glab's --auto-merge) and wait until it lands before repairing descendants. Add --auto --through <branch-or-pr> for a bounded range.",
   ),
   Command.withExamples([
     {
@@ -217,7 +223,7 @@ const mergeCommand = Command.make(
     },
     {
       command: "stack merge effectify-watcher --auto",
-      description: "Wait for GitHub requirements, then merge and repair descendants",
+      description: "Wait for forge merge requirements, then merge and repair descendants",
     },
     {
       command: "stack merge --auto --through effectify-format",
@@ -263,7 +269,8 @@ const undoCommand = Command.make(
     },
     {
       command: "stack undo --apply",
-      description: "Restore branch tips, PR bases, and metadata from the last mutation journal",
+      description:
+        "Restore branch tips, target branches, and metadata from the last mutation journal",
     },
   ]),
 );
@@ -279,7 +286,7 @@ const cli = Command.make("stack").pipe(
     },
     {
       command: "stack sync --dry-run",
-      description: "Preview inferred stack links from PR bases",
+      description: "Preview inferred stack links from forge target branches",
     },
     {
       command: "stack sync",
@@ -330,12 +337,24 @@ const live = (() => {
   ).pipe(Layer.provideMerge(proc));
 
   const git = Git.live.pipe(Layer.provide(cfg));
-  const github = GitHub.layer.pipe(Layer.provide(cfg));
+  const forge = Layer.unwrap(
+    Effect.gen(function* () {
+      const proc = yield* Proc.Service;
+      const cfgValue = yield* StackConfig;
+      const remoteOut = yield* proc
+        .exec(cfgValue.root, "git", ["remote", "get-url", "origin"], [0, 1])
+        .pipe(Effect.catch(() => Effect.succeed("")));
+      const envKind = Forge.fromEnv(process.env.STACK_FORGE);
+      const detected = remoteOut ? (Forge.detect(remoteOut)?.kind ?? null) : null;
+      const kind = envKind ?? detected ?? "github";
+      return kind === "gitlab" ? ForgeGitLab.layer : ForgeGitHub.layer;
+    }),
+  ).pipe(Layer.provide(cfg));
   const store = Store.live.pipe(Layer.provideMerge(cfg));
   return Stack.layer.pipe(
     Layer.provideMerge(cfg),
     Layer.provideMerge(git),
-    Layer.provideMerge(github),
+    Layer.provideMerge(forge),
     Layer.provideMerge(Progress.live),
     Layer.provideMerge(store),
   );

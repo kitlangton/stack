@@ -38,7 +38,12 @@ export type StackResultItem =
       readonly branch: string;
       readonly parent: string;
     }
-  | { readonly _tag: "Push"; readonly mode: Mode; readonly branch: string }
+  | {
+      readonly _tag: "Push";
+      readonly mode: Mode;
+      readonly branch: string;
+      readonly remotes: ReadonlyArray<string>;
+    }
   | {
       readonly _tag: "RetargetPull";
       readonly mode: Mode;
@@ -83,7 +88,9 @@ export const render = (item: StackResultItem) => {
     case "Rebase":
       return `${prefix(item.mode)}rebase ${item.branch} onto ${item.parent}`;
     case "Push":
-      return `${prefix(item.mode)}push ${item.branch}`;
+      return item.remotes.length === 1 && item.remotes[0] === "origin"
+        ? `${prefix(item.mode)}push ${item.branch}`
+        : `${prefix(item.mode)}push ${item.branch} to ${item.remotes.join(", ")}`;
     case "RetargetPull":
       return `${prefix(item.mode)}retarget #${item.pr} to ${item.base}`;
     case "CreatePull":

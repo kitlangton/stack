@@ -18,10 +18,13 @@ import {
 } from "../src/domain/model.ts";
 import { renderStatus } from "../src/format.ts";
 import * as Proc from "../src/platform/proc.ts";
+import * as StackBlock from "../src/stackBlock.ts";
 import * as StackGraph from "../src/stackGraph.ts";
 import { StackConfig } from "../src/services/Config.ts";
+import * as Forge from "../src/services/Forge.ts";
+import * as ForgeGitHub from "../src/services/forge/github.ts";
+import * as ForgeGitLab from "../src/services/forge/gitlab.ts";
 import * as Git from "../src/services/Git.ts";
-import * as GitHub from "../src/services/GitHub.ts";
 import * as Progress from "../src/services/Progress.ts";
 import { Stack } from "../src/services/Stack.ts";
 import { Store } from "../src/services/Store.ts";
@@ -60,12 +63,13 @@ const metaFor = (pull: ReturnType<typeof pullRef>, body = "body") =>
     labels: [],
   });
 
-const gitAndGithub = (service: Partial<Git.Interface & GitHub.Interface>) => {
+const gitAndGithub = (service: Partial<Git.Interface & Forge.Interface>) => {
   const unused = (tool: string, args: ReadonlyArray<string>) =>
     new ExecError(tool, args, 1, "unused test service");
-  const defaults: Git.Interface & GitHub.Interface = {
+  const defaults: Git.Interface & Forge.Interface = {
     dirty: () => Effect.succeed([]),
     fetch: () => Effect.void,
+    remotes: () => Effect.succeed([]),
     refs: () => Effect.succeed([]),
     current: () => Effect.succeed(""),
     remote: () => Effect.succeed(Option.none()),
@@ -93,7 +97,7 @@ const gitAndGithub = (service: Partial<Git.Interface & GitHub.Interface>) => {
 
   return Layer.mergeAll(
     Layer.succeed(Git.Service, Git.Service.of(impl)),
-    Layer.succeed(GitHub.Service, GitHub.Service.of(impl)),
+    Layer.succeed(Forge.Service, Forge.Service.of(impl)),
   );
 };
 
@@ -107,7 +111,7 @@ const stackTestLayer = (opts: {
   readonly bases?: Readonly<Record<string, string>>;
   readonly current?: string;
   readonly state?: StackState;
-  readonly service?: Partial<Git.Interface & GitHub.Interface>;
+  readonly service?: Partial<Git.Interface & Forge.Interface>;
   readonly progress?: Array<Progress.ProgressEvent>;
 }) => {
   const pulls = opts.pulls ?? [];
@@ -166,7 +170,7 @@ const integrationGitHub = (opts: {
   readonly log: Array<string>;
 }) =>
   Layer.effect(
-    GitHub.Service,
+    Forge.Service,
     Effect.gen(function* () {
       const proc = yield* Proc.Service;
       const pulls = yield* Ref.make(Array.from(opts.pulls));
@@ -283,7 +287,7 @@ const integrationGitHub = (opts: {
           yield* Ref.update(pulls, (items) => items.filter((item) => item.number !== pr));
         });
 
-      return GitHub.Service.of({
+      return Forge.Service.of({
         auto: (pr) => record(`auto ${pr}`),
         merge,
         wait: (pr) => record(`wait ${pr}`),
@@ -443,7 +447,7 @@ const make = (state = new StackState({ version: 1, links: [] })) =>
       }),
     ),
     Layer.provideMerge(
-      GitHub.memory({
+      ForgeGitHub.memory({
         pulls: [
           pullRef({
             number: 17544,
@@ -1185,11 +1189,11 @@ describe("GitHub", () => {
     const cfgLayer = StackConfig.layer({
       root: "/tmp/stack",
       trunks: ["dev"],
-      githubWaitIntervalMillis: 1_000,
+      forgeWaitIntervalMillis: 1_000,
     }).pipe(Layer.provide(NodeServices.layer));
 
     return Effect.gen(function* () {
-      const github = yield* GitHub.Service;
+      const github = yield* Forge.Service;
       const fiber = yield* github.wait(4).pipe(Effect.forkChild({ startImmediately: true }));
       yield* Effect.yieldNow;
       expect(calls).toHaveLength(1);
@@ -1201,7 +1205,9 @@ describe("GitHub", () => {
       yield* Fiber.join(fiber);
       expect(calls).toHaveLength(2);
     }).pipe(
-      Effect.provide(GitHub.layer.pipe(Layer.provideMerge(cfgLayer), Layer.provideMerge(proc))),
+      Effect.provide(
+        ForgeGitHub.layer.pipe(Layer.provideMerge(cfgLayer), Layer.provideMerge(proc)),
+      ),
     );
   });
 });
@@ -1807,6 +1813,125 @@ describe("Stack", () => {
       expect(state.links.find((item) => item.branch === "stack-b")?.pr).toBe(5);
       expect(state.links.find((item) => item.branch === "stack-c")?.anchor).toBe("stack-b-2");
     }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("sync pushes fork PR heads and upstream base mirrors", () => {
+    const seen: Array<string> = [];
+    const refs = new Map([
+      ["dev", ref("dev", "dev-new")],
+      ["stack-a", ref("stack-a", "stack-a-head")],
+      ["stack-b", ref("stack-b", "stack-b-head")],
+    ]);
+    const baseMap = new Map(
+      Object.entries(bases(["stack-a", "dev", "dev-old"], ["stack-b", "stack-a", "stack-a-old"])),
+    );
+    const layer = stackTestLayer({
+      refs: [...refs.values()],
+      pulls: [
+        pullRef({
+          number: 10,
+          head: "stack-a",
+          headRepository: "kitlangton/opencode",
+          base: "dev",
+          url: "u10",
+          draft: false,
+        }),
+        pullRef({
+          number: 11,
+          head: "stack-b",
+          headRepository: "kitlangton/opencode",
+          base: "stack-a",
+          url: "u11",
+          draft: false,
+        }),
+      ],
+      bases: Object.fromEntries(baseMap),
+      state: stackState([
+        stackLink({ branch: "stack-a", parent: "dev", anchor: "dev-old", pr: 10 }),
+        stackLink({ branch: "stack-b", parent: "stack-a", anchor: "stack-a-old", pr: 11 }),
+      ]),
+      service: {
+        refs: () => Effect.succeed([...refs.values()]),
+        remotes: () =>
+          Effect.succeed([
+            { name: "origin", url: "git@github.com:anomalyco/opencode.git" },
+            { name: "fork", url: "git@github.com:kitlangton/opencode.git" },
+          ]),
+        head: (name) =>
+          Effect.succeed(
+            Option.fromNullishOr(
+              refs.get(name)?.head ??
+                (name.startsWith("origin/") ? refs.get(name.slice(7))?.head : undefined),
+            ),
+          ),
+        base: (branch, parent) =>
+          Effect.succeed(Option.fromNullishOr(baseMap.get(`${branch}:${parent}`))),
+        replay: (branch, parent) =>
+          Effect.sync(() => {
+            seen.push(`rebase ${branch} ${parent}`);
+            refs.set(branch, ref(branch, `${branch}-rebased`));
+            baseMap.set(
+              `${branch}:${parent}`,
+              refs.get(parent.startsWith("origin/") ? parent.slice(7) : parent)?.head ?? "",
+            );
+          }),
+        push: (branch, remote = "origin") =>
+          Effect.sync(() => void seen.push(`push ${branch} ${remote}`)),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.sync();
+
+      expect(seen).toContain("push stack-a fork");
+      expect(seen).toContain("push stack-a origin");
+      expect(seen).toContain("push stack-b fork");
+      expect(seen).not.toContain("push stack-b origin");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("sync pushes stale fork heads even when the local stack is current", () => {
+    const seen: Array<string> = [];
+    const refs = [ref("dev", "dev-head"), ref("stack-a", "stack-a-local")];
+    const layer = stackTestLayer({
+      refs,
+      pulls: [
+        pullRef({
+          number: 10,
+          head: "stack-a",
+          headRepository: "kitlangton/opencode",
+          base: "dev",
+          url: "u10",
+          draft: false,
+        }),
+      ],
+      bases: bases(["stack-a", "dev", "dev-head"]),
+      state: stackState([
+        stackLink({ branch: "stack-a", parent: "dev", anchor: "dev-head", pr: 10 }),
+      ]),
+      service: {
+        remotes: () =>
+          Effect.succeed([
+            { name: "origin", url: "git@github.com:anomalyco/opencode.git" },
+            { name: "fork", url: "git@github.com:kitlangton/opencode.git" },
+          ]),
+        head: (name) =>
+          Effect.succeed(
+            Option.fromNullishOr(name === "fork/stack-a" ? "stack-a-stale" : refsHead(refs, name)),
+          ),
+        push: (branch, remote = "origin") =>
+          Effect.sync(() => void seen.push(`push ${branch} ${remote}`)),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const lines = yield* stack.sync();
+
+      expect(seen).toEqual(["push stack-a fork"]);
+      expect(lines).toContain("└─ ✓ stack-a #10 pushed to fork");
+    }).pipe(Effect.provide(layer));
   });
 
   it.effect("sync dry-run previews without mutating", () => {
@@ -2476,7 +2601,7 @@ describe("Stack", () => {
         Layer.provideMerge(cfgLayer),
         Layer.provideMerge(Git.live.pipe(Layer.provide(cfgLayer))),
         Layer.provideMerge(
-          GitHub.memory({
+          ForgeGitHub.memory({
             pulls: [
               pullRef({
                 number: 2,
@@ -2935,4 +3060,188 @@ describe("Stack", () => {
       );
     }).pipe(Effect.provide(platform)),
   );
+});
+
+describe("Forge", () => {
+  it("detects github.com via https and ssh", () => {
+    expect(Forge.detect("https://github.com/owner/repo.git")).toEqual({
+      kind: "github",
+      host: "github.com",
+      owner: "owner",
+      repo: "repo",
+    });
+    expect(Forge.detect("git@github.com:owner/repo.git")).toEqual({
+      kind: "github",
+      host: "github.com",
+      owner: "owner",
+      repo: "repo",
+    });
+  });
+
+  it("detects gitlab.com and nested subgroups", () => {
+    expect(Forge.detect("https://gitlab.com/group/subgroup/repo.git")).toEqual({
+      kind: "gitlab",
+      host: "gitlab.com",
+      owner: "group/subgroup",
+      repo: "repo",
+    });
+    expect(Forge.detect("git@gitlab.com:group/repo.git")).toEqual({
+      kind: "gitlab",
+      host: "gitlab.com",
+      owner: "group",
+      repo: "repo",
+    });
+  });
+
+  it("detects self-hosted gitlab via hostname heuristic", () => {
+    expect(Forge.detect("https://gitlab.example.com/team/repo.git")?.kind).toBe("gitlab");
+    expect(Forge.detect("git@gitlab.internal:team/repo.git")?.kind).toBe("gitlab");
+    expect(Forge.detect("https://gh.enterprise.io/team/repo.git")).toBeNull();
+  });
+
+  it("synthesises pull/MR url bases per forge", () => {
+    expect(Forge.pullUrlBaseFor("https://github.com/owner/repo.git")).toBe(
+      "https://github.com/owner/repo/pull",
+    );
+    expect(Forge.pullUrlBaseFor("https://gitlab.com/group/repo.git")).toBe(
+      "https://gitlab.com/group/repo/-/merge_requests",
+    );
+    expect(Forge.pullUrlBaseFor("https://unknown.example/foo/bar.git")).toBeNull();
+  });
+
+  it("reads STACK_FORGE env override", () => {
+    expect(Forge.fromEnv(undefined)).toBeNull();
+    expect(Forge.fromEnv("")).toBeNull();
+    expect(Forge.fromEnv("github")).toBe("github");
+    expect(Forge.fromEnv("GITLAB")).toBe("gitlab");
+    expect(Forge.fromEnv("bitbucket")).toBeNull();
+  });
+
+  it.effect("gitlab memory layer satisfies Forge.Service", () =>
+    Effect.gen(function* () {
+      const forge = yield* Forge.Service;
+      const created = yield* forge.create("feature/x", "main", "title", "body", ["bug"]);
+      expect(String(created.head)).toBe("feature/x");
+      expect(String(created.base)).toBe("main");
+      const list = yield* forge.pulls();
+      expect(list).toHaveLength(1);
+      const meta = yield* forge.pull(created.number);
+      expect(String(meta.state)).toBe("opened");
+      expect(meta.labels.map((label) => label.name)).toEqual(["bug"]);
+      yield* forge.close(created.number);
+      const after = yield* forge.pulls();
+      expect(after).toHaveLength(0);
+    }).pipe(Effect.provide(ForgeGitLab.memory())),
+  );
+});
+
+describe("StackBlock", () => {
+  const pulls = [
+    pullRef({ number: 1, head: "feat/a", base: "main", url: "u1", draft: false }),
+    pullRef({ number: 2, head: "feat/b", base: "feat/a", url: "u2", draft: false }),
+    pullRef({ number: 3, head: "feat/c", base: "feat/b", url: "u3", draft: false }),
+  ];
+
+  it("renders GitHub PR references with the # prefix by default", () => {
+    const block = StackBlock.render({
+      pulls,
+      metas: new Map(),
+      chain: ["feat/a", "feat/b", "feat/c"],
+      branch: "feat/b",
+      previous: "",
+    });
+    expect(block).toContain("1. #1");
+    expect(block).toContain("2. **#2** 👈 current");
+    expect(block).toContain("3. #3");
+  });
+
+  it("renders GitLab MR references with the ! prefix when refPrefix is set", () => {
+    const block = StackBlock.render({
+      pulls,
+      metas: new Map(),
+      chain: ["feat/a", "feat/b", "feat/c"],
+      branch: "feat/c",
+      previous: "",
+      refPrefix: "!",
+    });
+    expect(block).toContain("1. !1");
+    expect(block).toContain("2. !2");
+    expect(block).toContain("3. **!3** 👈 current");
+    expect(block).not.toContain("#1");
+  });
+
+  it("parses both # and ! prefixed entries from a previous block", () => {
+    const previous = `body before
+
+<!-- stack:links:start -->
+### [Stack](https://github.com/kitlangton/stack)
+
+1. !1
+2. !2
+3. **!3** 👈 current
+<!-- stack:links:end -->`;
+    const block = StackBlock.render({
+      pulls: [pulls[2]!],
+      metas: new Map(),
+      chain: ["feat/c"],
+      branch: "feat/c",
+      previous,
+      refPrefix: "!",
+    });
+    expect(block).toContain("**!3** 👈 current");
+  });
+
+  it("does not duplicate live entries when prefix migrates between syncs", () => {
+    const previous = `body before
+
+<!-- stack:links:start -->
+### [Stack](https://github.com/kitlangton/stack)
+
+1. #1
+2. #2
+3. **#3** 👈 current
+<!-- stack:links:end -->`;
+    const block = StackBlock.render({
+      pulls,
+      metas: new Map(),
+      chain: ["feat/a", "feat/b", "feat/c"],
+      branch: "feat/c",
+      previous,
+      refPrefix: "!",
+    });
+    expect(block).not.toContain("#1");
+    expect(block).not.toContain("#2");
+    expect(block).not.toContain("#3");
+    expect(block).toContain("1. !1");
+    expect(block).toContain("2. !2");
+    expect(block).toContain("3. **!3** 👈 current");
+  });
+});
+
+describe("StackGraph trunk display", () => {
+  it("treeFromStatus picks the trunk that is actually referenced as a parent", () => {
+    const graph = StackGraph.make({
+      state: stackState([stackLink({ branch: "feat/a", parent: "main", anchor: "x", pr: 1 })]),
+      refs: [
+        branchRef({ name: "dev", head: "d" }),
+        branchRef({ name: "main", head: "m" }),
+        branchRef({ name: "feat/a", head: "a" }),
+      ],
+      pulls: [pullRef({ number: 1, head: "feat/a", base: "main", url: "u1", draft: false })],
+      trunks: ["dev", "main", "master"],
+      current: "feat/a",
+    });
+    expect(graph.tree.trunk).toBe("main");
+  });
+
+  it("treeFromStatus falls back to first trunk when none is referenced", () => {
+    const graph = StackGraph.make({
+      state: stackState([]),
+      refs: [],
+      pulls: [],
+      trunks: ["dev", "main"],
+      current: "",
+    });
+    expect(graph.tree.trunk).toBe("dev");
+  });
 });

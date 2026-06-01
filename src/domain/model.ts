@@ -35,6 +35,7 @@ export class PullRef extends Schema.Class<PullRef>("PullRef")({
   number: PrNumber,
   title: Schema.NullOr(Schema.String),
   head: BranchName,
+  headRepository: Schema.NullOr(Schema.String),
   base: BranchName,
   url: PullUrl,
   draft: Schema.Boolean,
@@ -50,6 +51,7 @@ export class PullMeta extends Schema.Class<PullMeta>("PullMeta")({
   title: Schema.String,
   body: Schema.String,
   head: BranchName,
+  headRepository: Schema.NullOr(Schema.String),
   base: BranchName,
   url: PullUrl,
   draft: Schema.Boolean,
@@ -203,9 +205,10 @@ export class StackOperationError extends Schema.TaggedErrorClass<StackOperationE
   }
 }
 
-export class GitHubDecodeError extends Schema.TaggedErrorClass<GitHubDecodeError>()(
-  "GitHubDecodeError",
+export class ForgeDecodeError extends Schema.TaggedErrorClass<ForgeDecodeError>()(
+  "ForgeDecodeError",
   {
+    tool: Schema.String,
     args: Schema.Array(Schema.String),
     output: Schema.String,
     detail: Schema.String,
@@ -213,24 +216,26 @@ export class GitHubDecodeError extends Schema.TaggedErrorClass<GitHubDecodeError
   },
 ) {
   constructor(
+    readonly tool: string,
     readonly args: ReadonlyArray<string>,
     readonly output: string,
     readonly detail: string,
   ) {
     super({
+      tool,
       args: Array.from(args),
       output,
       detail,
-      message: `gh ${args.join(" ")} returned invalid JSON`,
+      message: `${tool} ${args.join(" ")} returned invalid JSON`,
     });
   }
 }
 
 export type StoreError = StateError;
-export type GitHubError = ExecError | GitHubDecodeError;
+export type ForgeError = ExecError | ForgeDecodeError;
 export type StackError =
   | ExecError
-  | GitHubDecodeError
+  | ForgeDecodeError
   | StateError
   | BranchError
   | MergeBaseError
@@ -247,6 +252,7 @@ export const pullRef = (value: {
   number: number;
   title?: string | null;
   head: string;
+  headRepository?: string | null;
   base: string;
   url: string;
   draft: boolean;
@@ -256,6 +262,7 @@ export const pullRef = (value: {
     number: prNumber(value.number),
     title: value.title ?? null,
     head: branchName(value.head),
+    headRepository: value.headRepository ?? null,
     base: branchName(value.base),
     url: pullUrl(value.url),
     draft: value.draft,
@@ -267,6 +274,7 @@ export const pullMeta = (value: {
   title: string;
   body: string;
   head: string;
+  headRepository?: string | null;
   base: string;
   url: string;
   draft: boolean;
@@ -278,6 +286,7 @@ export const pullMeta = (value: {
     title: value.title,
     body: value.body,
     head: branchName(value.head),
+    headRepository: value.headRepository ?? null,
     base: branchName(value.base),
     url: pullUrl(value.url),
     draft: value.draft,

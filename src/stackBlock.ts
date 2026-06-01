@@ -8,11 +8,12 @@ const format = (
   branch: string,
   prs: ReadonlyMap<string, PullRef>,
   metas: ReadonlyMap<string, PullMeta>,
+  refPrefix: string,
 ) => {
   const pr = prs.get(branch);
-  if (pr) return `#${pr.number}`;
+  if (pr) return `${refPrefix}${pr.number}`;
   const meta = metas.get(branch);
-  if (meta) return `#${meta.number}`;
+  if (meta) return `${refPrefix}${meta.number}`;
   return `\`${branch}\``;
 };
 
@@ -31,7 +32,7 @@ const completedLines = (
       const checked = line.startsWith("- [x]");
       const numbered = /^\d+\.\s+/.test(line);
       const branch = line.match(/`([^`]+)`/)?.[1] ?? null;
-      const pr = line.match(/#\d+/)?.[0] ?? null;
+      const pr = line.match(/[#!]\d+/)?.[0] ?? null;
       const key = branch ?? pr;
       if (!key || liveKeys.has(key)) return [];
       if (completedKeys.size > 0 && !numbered && !checked && !completedKeys.has(key)) {
@@ -45,7 +46,7 @@ const completedLines = (
           .replace(/^- \[[ x]\]\s+/, "")
           .replace(/^\d+\.\s+/, "")
           .replaceAll("**", "")
-          .replace(/(#\d+)\s+`[^`]+`/g, "$1")
+          .replace(/([#!]\d+)\s+`[^`]+`/g, "$1")
           .replace(/\s*(?:←|👈) current$/, ""),
       ];
     });
@@ -58,17 +59,19 @@ export const render = (opts: {
   readonly completed?: ReadonlySet<string>;
   readonly branch: string;
   readonly previous: string;
+  readonly refPrefix?: string;
 }) => {
+  const prefix = opts.refPrefix ?? "#";
   const prs = new Map(opts.pulls.map((pull) => [String(pull.head), pull]));
   const chain = opts.chain;
   const liveKeys = new Set(
     chain.flatMap((branch) => {
       const pr = prs.get(branch) ?? opts.metas.get(branch) ?? null;
-      return pr ? [branch, `#${pr.number}`] : [branch];
+      return pr ? [branch, `#${pr.number}`, `!${pr.number}`] : [branch];
     }),
   );
   const line = (name: string) => {
-    const head = format(name, prs, opts.metas);
+    const head = format(name, prs, opts.metas, prefix);
     if (name === opts.branch) return `**${head}** 👈 current`;
     return head;
   };

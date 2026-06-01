@@ -9,11 +9,17 @@ dev
 ╰───────────╯
 ```
 
-Squash-safe stacked PRs for GitHub repos that squash-merge and delete branches.
+Squash-safe stacked PRs / MRs for GitHub and GitLab repos that squash-merge and
+delete branches.
 
-`stack` preserves stack intent locally, infers obvious relationships from PR
-bases, and repairs descendants after parent changes or merges so open PRs keep
-their comments, reviews, and context.
+`stack` preserves stack intent locally, infers obvious relationships from PR /
+MR target branches, and repairs descendants after parent changes or merges so
+open changes keep their comments, reviews, and context.
+
+Works against GitHub (via the `gh` CLI) and GitLab (via the `glab` CLI). The
+forge is auto-detected from the `origin` remote URL (github.com, gitlab.com,
+self-hosted instances whose hostname contains `github` or `gitlab`) and can be
+overridden with `STACK_FORGE=github` or `STACK_FORGE=gitlab`.
 
 ## Install
 

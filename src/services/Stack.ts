@@ -290,6 +290,13 @@ ${note}`;
           scoped.links,
         );
 
+      const writeScopedState = (branches: ReadonlySet<string>) =>
+        Effect.fn("Stack.writeScopedState")((next: ReturnType<typeof stackState>) =>
+          store
+            .read()
+            .pipe(Effect.flatMap((latest) => store.write(mergeState(latest, branches, next)))),
+        );
+
       const actionBranch = (action: StackResult.StackResultItem) => {
         switch (action._tag) {
           case "Text":
@@ -965,16 +972,7 @@ ${note}`;
                         ),
                       )
                     : reconciled.replayAnchors;
-                  const writeState = target
-                    ? (next: ReturnType<typeof stackState>) =>
-                        store
-                          .read()
-                          .pipe(
-                            Effect.flatMap((latest) =>
-                              store.write(mergeState(latest, target.branches, next)),
-                            ),
-                          )
-                    : undefined;
+                  const writeState = target ? writeScopedState(target.branches) : undefined;
                   const repair = yield* repairStack(scoped, refs, pulls, {
                     apply: !dryRun,
                     journalState: state,
@@ -983,7 +981,15 @@ ${note}`;
                     ...(writeState ? { writeState } : {}),
                     preserveUndo,
                   });
-                  const notes = yield* linksFor(scoped, !dryRun, new Set(), pulls);
+                  const notesPulls = dryRun ? pulls : yield* github.pulls();
+                  const notes = yield* linksFor(
+                    repair.state,
+                    !dryRun,
+                    new Set(),
+                    target
+                      ? notesPulls.filter((pull) => target.branches.has(String(pull.head)))
+                      : notesPulls,
+                  );
                   const changed = repair.actions.length > 0 || notes.actions.length > 0;
                   const lines = !changed
                     ? renderSyncTree({
@@ -1421,21 +1427,15 @@ ${note}`;
                     apply: true,
                     saved: new Map([[target, name]]),
                     journalState: nextState,
-                    writeState: (next) =>
-                      store
-                        .read()
-                        .pipe(
-                          Effect.flatMap((latest) =>
-                            store.write(mergeState(latest, branches, next)),
-                          ),
-                        ),
+                    writeState: writeScopedState(branches),
                   },
                 );
+                const repairedPulls = yield* github.pulls();
                 const notes = yield* linksFor(
                   repair.state,
                   true,
                   landed,
-                  nextPulls.filter((item) => branches.has(String(item.head))),
+                  repairedPulls.filter((item) => branches.has(String(item.head))),
                 );
                 if (current !== target) yield* git.switch(current);
                 const tail = next ? `next root: ${next}` : "next root: none";

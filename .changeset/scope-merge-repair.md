@@ -2,4 +2,4 @@
 "stack": patch
 ---
 
-Scope merge descendant repair and stack-block refreshes to the selected stack so independent recorded stacks are not rewritten.
+Scope repair and stack-block refreshes to the selected stack, and update blocks for PRs recreated during repair.

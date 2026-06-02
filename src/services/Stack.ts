@@ -367,9 +367,16 @@ ${note}`;
         }),
       );
 
-      const diagram = Effect.fn("Stack.diagram")(function* () {
+      const diagram = Effect.fn("Stack.diagram")(function* (branches?: ReadonlySet<string>) {
         const report = yield* status();
-        return ["", "Stack", renderDiagram(report)];
+        const scopedReport = branches
+          ? new StatusReport({
+              current: report.current,
+              trunks: report.trunks,
+              nodes: report.nodes.filter((node) => branches.has(String(node.branch))),
+            })
+          : report;
+        return ["", "Stack", renderDiagram(scopedReport)];
       });
 
       const adopt = Effect.fn("Stack.adopt")((branch: string, parent: string) =>
@@ -1439,7 +1446,7 @@ ${note}`;
                 );
                 if (current !== target) yield* git.switch(current);
                 const tail = next ? `next root: ${next}` : "next root: none";
-                const view = yield* diagram();
+                const view = yield* diagram(branches);
                 return [...actions, ...repair.lines, ...notes.lines, tail, ...view];
               }),
             );

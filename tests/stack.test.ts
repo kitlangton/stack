@@ -2205,7 +2205,7 @@ describe("Stack", () => {
     }).pipe(Effect.provide(test.layer));
   });
 
-  it.effect("land repair only plans and applies descendants of the selected stack", () => {
+  it.effect("land repair and final diagram only include the selected stack", () => {
     const seen: Array<string> = [];
     const layer = stackTestLayer({
       current: "active-child",
@@ -2251,8 +2251,11 @@ describe("Stack", () => {
       expect(output).not.toContain("other-root");
       expect(output).not.toContain("other-child");
 
-      yield* stack.land("active-root", { apply: true });
+      const applied = (yield* stack.land("active-root", { apply: true })).join("\n");
       const state = yield* store.read();
+      expect(applied).toContain("Stack");
+      expect(applied).not.toContain("other-root");
+      expect(applied).not.toContain("other-child");
       expect(seen).toContain("rebase active-child");
       expect(seen).toContain("push active-child");
       expect(seen).toContain("body 2");

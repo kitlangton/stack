@@ -1,5 +1,11 @@
 # @kitlangton/stack
 
+## 0.3.0
+
+### Minor Changes
+
+- c343c36: Standardize mutating command syntax: bare `stack sync` now previews changes and `stack sync --apply` performs repairs, matching the existing `merge` and `undo` workflows. Clarify the agent-first workflow in the README and bundled stack skill, preserve the ASCII stack logo, and keep the CLI reference as a concise final section.
+
 ## 0.2.0
 
 ### Minor Changes
@@ -22,6 +28,7 @@
 
 - c12b921: Add GitLab support. `stack` now talks to GitLab merge requests through the
   `glab` CLI alongside GitHub pull requests via `gh`.
+
   - New `CodeHostGitLab.layer` shells out to `glab mr ...` and `glab api` and
     maps GitLab's `iid`, `source_branch`,
     `target_branch`, `web_url`, `description`, and `opened|merged|closed|locked`
@@ -46,6 +53,7 @@
 ### Patch Changes
 
 - c12b921: User-facing polish for code-host-neutral wording.
+
   - CLI help text, the `guide` command, and the merge failure hint now talk about
     "changes" / "target branches" / "code-host auto-merge" instead of
     "PRs" / "PR bases" / "GitHub auto-merge". GitHub-specific behaviour (admin
@@ -60,6 +68,7 @@
     responses and GitHub lookup failures trigger the same safe recreation path.
 
 - c12b921: Fix three rendering quirks surfaced by the GitLab smoke test.
+
   - `stack sync` against a GitLab remote now writes `!1`, `!2`, `!3` in the stack
     block inside each MR description so they render as real merge-request links
     on gitlab.com. Previously the block always used GitHub's `#N` syntax, which

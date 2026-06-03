@@ -50,9 +50,9 @@ can restore the previous branch tips, change target branches, and stack metadata
 - `stack status`: show the relevant tracked stack graph and include open change details when the code-host CLI (`gh` or `glab`) is available.
 - `stack guide`: print the opinionated happy path for agents and humans.
 - `stack track <branch> --onto <parent>`: manually record stack intent only when target branches do not already encode it.
-- `stack sync --dry-run [branch]`: preview inferred target-branch stack links and repairs without changing branches or changes.
-- `stack sync [branch]`: infer clear target-branch stack links, repair descendants, retarget changes, and refresh stack blocks. With a branch argument, sync only the stack containing that branch.
-- `stack sync --continue-on-failure` / `stack sync --keep-going`: process independent stacks, summarize successes and failures, and exit nonzero if any stack failed.
+- `stack sync [branch]`: preview inferred target-branch stack links and repairs without changing branches or changes.
+- `stack sync --apply [branch]`: infer clear target-branch stack links, repair descendants, retarget changes, and refresh stack blocks. With a branch argument, sync only the stack containing that branch.
+- `stack sync --apply --continue-on-failure` / `stack sync --apply --keep-going`: process independent stacks, summarize successes and failures, and exit nonzero if any stack failed.
 - `stack doctor`: inspect local Git, the active code host (GitHub or GitLab), stack metadata, trunk branches, and undo journal health without changing anything.
 - `stack merge [branch]`: dry-run root merge plus descendant repair.
 - `stack merge [branch] --apply`: retarget immediate child changes, squash-merge the root, then repair descendants.
@@ -69,8 +69,8 @@ GitHub:
 ```bash
 gh pr create --base dev --head stack-a
 gh pr create --base stack-a --head stack-b
-stack sync --dry-run
 stack sync
+stack sync --apply
 ```
 
 GitLab:
@@ -78,12 +78,12 @@ GitLab:
 ```bash
 glab mr create --target-branch dev --source-branch stack-a --fill
 glab mr create --target-branch stack-a --source-branch stack-b --fill
-stack sync --dry-run
 stack sync
+stack sync --apply
 ```
 
-Prefer this workflow. `stack sync --dry-run` should show the inferred links, and
-`stack sync` records them, removes stale local links, repairs descendants if
+Prefer this workflow. `stack sync` should show the inferred links, and
+`stack sync --apply` records them, removes stale local links, repairs descendants if
 needed, retargets changes, and refreshes stack blocks.
 
 Use `stack guide` when you need the CLI itself to print this guidance.
@@ -100,7 +100,7 @@ available. It is opinionated: backup branches are hidden, and when the current
 branch is stack-relevant it focuses on that stack instead of listing every local
 branch.
 
-Use `stack sync --dry-run`, not `stack status`, when you need target-branch
+Use `stack sync`, not `stack status`, when you need target-branch
 inference before mutation.
 
 ## Track Existing Branches
@@ -116,11 +116,11 @@ branches, self-parenting, unknown branches, missing merge bases, and cycles.
 ## Sync The Common Safe Workflow
 
 ```bash
-stack sync --dry-run
 stack sync
+stack sync --apply
 ```
 
-Use `sync` when open change target branches already describe the stack, a parent
+Use `sync --apply` when open change target branches already describe the stack, a parent
 branch has changed, or the repo needs the safe common maintenance flow. It:
 
 - infers clear target-branch stack links
@@ -132,15 +132,15 @@ branch has changed, or the repo needs the safe common maintenance flow. It:
 - refreshes stack blocks in change descriptions
 - prints a concise tree summary of changed, planned, or failed branches
 
-Run `stack sync --dry-run` first when you want a preview of inferred links and
+Run `stack sync` first when you want a preview of inferred links and
 repairs before mutation.
 
-`stack sync <branch>` scopes sync to the stack containing that branch. If no
-branch is provided and the current branch is stack-relevant, bare `stack sync`
+`stack sync <branch>` scopes the preview to the stack containing that branch. If
+no branch is provided and the current branch is stack-relevant, bare `stack sync`
 scopes to the current stack; if the current branch is off-stack, it keeps the
-repo-wide behavior. `--dry-run` follows the same scoping rules.
+repo-wide behavior. `stack sync --apply` follows the same scoping rules.
 
-Use `stack sync --continue-on-failure` or `stack sync --keep-going` when one
+Use `stack sync --apply --continue-on-failure` or `stack sync --apply --keep-going` when one
 independent stack should not block the rest. It runs each root stack separately,
 prints succeeded and failed stacks, preserves the usual failure cleanup block for
 each failed stack, saves undo information for every mutated stack, and exits
@@ -156,7 +156,7 @@ journal, and tells the user which branch to repair before running `stack sync`
 again.
 
 Do not edit `.git/stack/state.json` by hand. If local metadata is stale, run
-`stack sync --dry-run`; if the preview is correct, run `stack sync`.
+`stack sync`; if the preview is correct, run `stack sync --apply`.
 
 ## Merge The Stack Root
 
@@ -203,7 +203,7 @@ metadata.
 
 ## Change Description Stack Blocks
 
-`stack sync` and `stack merge --apply/--auto` refresh a deterministic stack block
+`stack sync --apply` and `stack merge --apply/--auto` refresh a deterministic stack block
 in open change descriptions:
 
 ```md
@@ -225,10 +225,10 @@ stack blocks.
 
 ## Safety Rules
 
-- `stack sync --dry-run` never mutates branches, changes, or stack metadata.
+- Bare `stack sync` never mutates branches, changes, or stack metadata.
 - `stack merge` is dry-run by default.
-- History-rewriting commands need `--apply`, except `stack sync` is explicitly
-  the high-level mutating workflow and `stack merge --auto` waits for the code host.
+- Mutating commands need `--apply`, except `stack merge --auto` waits for the code
+  host and repairs descendants after the root lands.
 - Never mutate trunk branches such as `dev`, `main`, or `master`.
 - Before rebasing a branch, the tool creates a local backup branch.
 - If output is unclear, inspect with `stack status`, `stack history`, or command

@@ -46,10 +46,6 @@ const through = Flag.string("through").pipe(
   Flag.optional,
 );
 
-const dryRun = Flag.boolean("dry-run").pipe(
-  Flag.withDescription("Preview the sync workflow without changing branches or changes."),
-);
-
 const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
   Flag.withAlias("keep-going"),
   Flag.withDescription(
@@ -64,10 +60,10 @@ const guide = `Happy path for stacked changes (GitHub PRs / GitLab MRs)
    - Child change: target is the parent branch.
 
 2. Preview what stack will infer and repair.
-   stack sync --dry-run
+   stack sync
 
 3. Apply only after the preview looks right.
-   stack sync
+   stack sync --apply
 
 Use stack status to verify the relevant tracked stack. It hides backup branches,
 focuses on the current stack instead of listing every local branch, and
@@ -94,7 +90,7 @@ const statusCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Show the relevant tracked stack. Use sync --dry-run to preview target-branch inference and repairs.",
+    "Show the relevant tracked stack. Use sync to preview target-branch inference and repairs.",
   ),
 );
 
@@ -140,14 +136,14 @@ const syncCommand = Command.make(
   "sync",
   {
     branch: Argument.string("branch").pipe(Argument.optional),
-    dryRun,
+    apply,
     continueOnFailure,
   },
-  Effect.fn(function* ({ branch, dryRun, continueOnFailure }) {
+  Effect.fn(function* ({ branch, apply, continueOnFailure }) {
     const stack = yield* Stack;
     const branchValue = Option.getOrUndefined(branch);
     const items = yield* stack.sync({
-      dryRun,
+      apply,
       continueOnFailure,
       ...(branchValue === undefined ? {} : { branch: branchValue }),
     });
@@ -155,23 +151,23 @@ const syncCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Infer stack links from code-host target branches (GitHub PRs / GitLab MRs), clean stale metadata, repair branches, retarget changes, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. Add --dry-run to preview without changing anything.",
+    "Infer stack links from code-host target branches (GitHub PRs / GitLab MRs), clean stale metadata, repair branches, retarget changes, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. By default this is a dry run. Add --apply to mutate branches, changes, and stack metadata.",
   ),
   Command.withExamples([
     {
-      command: "stack sync --dry-run",
+      command: "stack sync",
       description: "Preview inferred stack links and repairs without changing branches or changes",
     },
     {
       command: "stack sync effectify-watcher",
-      description: "Sync only the stack containing effectify-watcher",
+      description: "Preview only the stack containing effectify-watcher",
     },
     {
-      command: "stack sync",
+      command: "stack sync --apply",
       description: "Run the common stack maintenance workflow",
     },
     {
-      command: "stack sync --continue-on-failure",
+      command: "stack sync --apply --continue-on-failure",
       description: "Sync independent stacks and summarize any failures at the end",
     },
   ]),
@@ -292,11 +288,11 @@ const cli = Command.make("stack").pipe(
       description: "Show the recommended stacked change workflow",
     },
     {
-      command: "stack sync --dry-run",
+      command: "stack sync",
       description: "Preview inferred stack links from code-host target branches",
     },
     {
-      command: "stack sync",
+      command: "stack sync --apply",
       description: "Run the previewed stack maintenance",
     },
   ]),

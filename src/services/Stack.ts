@@ -52,7 +52,7 @@ export interface StackService {
     },
   ) => Effect.Effect<ReadonlyArray<string>, StackError>;
   readonly sync: (opts?: {
-    readonly dryRun?: boolean;
+    readonly apply?: boolean;
     readonly branch?: string;
     readonly continueOnFailure?: boolean;
   }) => Effect.Effect<ReadonlyArray<string>, StackError>;
@@ -142,7 +142,7 @@ ${note}`;
             "  the undo journal was saved",
             "",
             "Next:",
-            `  repair ${rebase.branch} from ${rebase.backup}, push it, then run: stack sync`,
+            `  repair ${rebase.branch} from ${rebase.backup}, push it, then run: stack sync --apply`,
             "  or restore the pre-sync state with: stack undo --apply",
             "",
             "Git error:",
@@ -286,7 +286,7 @@ ${note}`;
         }
         if (backups > 0 && opts.mode === "apply") summary.push(`Backups created: ${backups}`);
         if (summary.length > 0) lines.push("", ...summary);
-        if (opts.mode === "dry-run") lines.push("", "Apply:", "  stack sync");
+        if (opts.mode === "dry-run") lines.push("", "Apply:", "  stack sync --apply");
         else if (!opts.failed && (backups > 0 || updatedPrs.size > 0)) {
           lines.push("", "Undo:", "  stack undo --apply");
         }
@@ -1077,7 +1077,8 @@ ${note}`;
 
       const sync: StackService["sync"] = Effect.fn("Stack.sync")((opts) =>
         Effect.gen(function* () {
-          const dryRun = opts?.dryRun ?? false;
+          const apply = opts?.apply ?? false;
+          const dryRun = !apply;
           const requestedBranch = opts?.branch;
           const continueOnFailure = opts?.continueOnFailure ?? false;
           const current = requestedBranch && dryRun ? "" : yield* git.current();

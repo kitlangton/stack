@@ -43,13 +43,13 @@ glab auth login    # GitLab
 4. Preview the stack:
 
 ```bash
-stack sync --dry-run
+stack sync
 ```
 
 5. Apply the safe maintenance workflow:
 
 ```bash
-stack sync
+stack sync --apply
 ```
 
 6. Merge from the root when ready:
@@ -64,7 +64,7 @@ then repair descendants automatically after the root lands.
 
 ## What It Does
 
-`stack sync` is the common safe workflow:
+`stack sync --apply` is the common maintenance workflow:
 
 - Infers stack links from PR/MR target branches.
 - Records stack intent in `.git/stack/state.json`.
@@ -127,10 +127,13 @@ Apply:
 ```bash
 stack status             # inspect the relevant local stack
 stack guide              # print the agent/human happy path
-stack sync --dry-run     # preview inference, repairs, and description updates
-stack sync               # apply the safe maintenance workflow
-stack sync <branch>      # sync only the stack containing branch
-stack sync --keep-going  # process independent stacks and report failures
+stack sync               # preview inference, repairs, and description updates
+stack sync --apply       # apply the previewed maintenance workflow
+stack sync <branch>      # preview only the stack containing branch
+stack sync --apply <branch>
+                         # apply only the stack containing branch
+stack sync --apply --keep-going
+                         # process independent stacks and report failures
 stack doctor             # inspect repo, host, metadata, and journal health
 stack merge              # dry-run the next root merge
 stack merge --apply      # merge root and repair descendants

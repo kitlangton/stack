@@ -1919,7 +1919,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.sync();
+      const items = yield* stack.sync({ apply: true });
       const state = yield* store.read();
       const undo = yield* store.readUndo();
 
@@ -1940,7 +1940,7 @@ describe("Stack", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("sync dry-run previews inferred links without storing metadata", () => {
+  it.effect("sync previews inferred links without storing metadata", () => {
     const events: Array<Progress.ProgressEvent> = [];
     const refs = [
       ref("dev", "aaa"),
@@ -1964,7 +1964,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.sync({ dryRun: true });
+      const items = yield* stack.sync();
       const state = yield* store.read();
       const undo = yield* store.readUndo();
 
@@ -1978,7 +1978,7 @@ describe("Stack", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("sync dry-run previews stale metadata reconciliation", () => {
+  it.effect("sync previews stale metadata reconciliation", () => {
     const layer = stackTestLayer({
       current: "stack-b",
       refs: [ref("dev", "aaa"), ref("stack-b", "bbb")],
@@ -1996,7 +1996,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.sync({ dryRun: true });
+      const items = yield* stack.sync();
       const state = yield* store.read();
 
       expect(items).toContain("Sync preview");
@@ -2037,7 +2037,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.sync({ branch: "app-root" });
+      const items = yield* stack.sync({ branch: "app-root", apply: true });
       const state = yield* store.read();
 
       expect(items).toContain("Synced stack");
@@ -2075,7 +2075,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const items = yield* stack.sync({ dryRun: true });
+      const items = yield* stack.sync();
 
       expect(items).toContain("Sync preview");
       expect(items).toContain("└─ ● other-root #3");
@@ -2118,7 +2118,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const output = (yield* stack.sync({ branch: "active-child", dryRun: true })).join("\n");
+      const output = (yield* stack.sync({ branch: "active-child" })).join("\n");
 
       expect(output).toContain("active-root");
       expect(output).toContain("active-child");
@@ -2167,13 +2167,13 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      yield* stack.sync({ branch: "active-child" });
+      yield* stack.sync({ branch: "active-child", apply: true });
 
       expect(seen).toContain("body 3");
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("sync dry-run previews replacement requests for missing non-terminal changes", () => {
+  it.effect("sync previews replacement requests for missing non-terminal changes", () => {
     const layer = stackTestLayer({
       current: "stack-c",
       refs: [ref("dev", "dev-new"), ref("stack-b", "stack-b"), ref("stack-c", "stack-c")],
@@ -2187,7 +2187,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const output = (yield* stack.sync({ dryRun: true })).join("\n");
+      const output = (yield* stack.sync()).join("\n");
 
       expect(output).toContain("stack-b would create PR");
       expect(output).toContain("Would create PRs: stack-b -> dev");
@@ -2220,7 +2220,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      yield* Effect.flip(stack.sync({ branch: "active-child" }));
+      yield* Effect.flip(stack.sync({ branch: "active-child", apply: true }));
       const undo = yield* store.readUndo();
 
       const entry = undo?.entries.find((item) => item.branch === "active-root");
@@ -2239,7 +2239,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const error = yield* Effect.flip(stack.sync({ branch: "standalone", dryRun: true }));
+      const error = yield* Effect.flip(stack.sync({ branch: "standalone" }));
 
       expect(String(error)).toContain("standalone is not part of a tracked stack");
     }).pipe(Effect.provide(layer));
@@ -2261,7 +2261,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const failed = yield* stack.sync().pipe(
+      const failed = yield* stack.sync({ apply: true }).pipe(
         Effect.flip,
         Effect.map((err) => String(err)),
       );
@@ -2332,7 +2332,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const error = yield* Effect.flip(stack.sync({ continueOnFailure: true }));
+      const error = yield* Effect.flip(stack.sync({ apply: true, continueOnFailure: true }));
       const items = (error instanceof Error ? error.message : String(error)).split("\n");
       const output = items.join("\n");
       const undo = yield* store.readUndo();
@@ -2450,7 +2450,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.sync();
+      const items = yield* stack.sync({ apply: true });
       const state = yield* store.read();
 
       expect(items).toContain("Synced stack");
@@ -2539,7 +2539,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      yield* stack.sync();
+      yield* stack.sync({ apply: true });
       const undo = yield* store.readUndo();
 
       expect(seen).toContain("push stack-a fork");
@@ -2591,7 +2591,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const lines = yield* stack.sync();
+      const lines = yield* stack.sync({ apply: true });
 
       expect(seen).toEqual([]);
       expect(lines.join("\n")).not.toContain("pushed to fork");
@@ -2631,20 +2631,20 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const output = (yield* stack.sync({ dryRun: true })).join("\n");
+      const output = (yield* stack.sync()).join("\n");
 
       expect(output).toContain("stack-a #10");
       expect(output).not.toContain("#11");
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("sync dry-run previews without mutating", () => {
+  it.effect("sync previews without mutating", () => {
     const test = makeSync();
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      const items = yield* stack.sync({ dryRun: true });
+      const items = yield* stack.sync();
       const state = yield* store.read();
       const undo = yield* store.readUndo();
 
@@ -2662,7 +2662,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      const items = yield* stack.sync();
+      const items = yield* stack.sync({ apply: true });
 
       expect(items).toContain("└─ ✓ stack-b #5 rebased onto dev");
       expect(items).toContain("   └─ ✓ stack-c #3 rebased onto stack-b");
@@ -2701,7 +2701,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      yield* stack.sync({ dryRun: false });
+      yield* stack.sync({ apply: true });
 
       expect(seen).toContain("rebase child origin/dev child-only");
       expect(seen).not.toContain("rebase child origin/dev parent-1,parent-2,child-only");
@@ -2714,7 +2714,7 @@ describe("Stack", () => {
     return Effect.gen(function* () {
       const stack = yield* Stack;
       const store = yield* Store;
-      yield* stack.sync();
+      yield* stack.sync({ apply: true });
       const items = yield* stack.undo(true);
       const state = yield* store.read();
       const undo = yield* store.readUndo();
@@ -2743,7 +2743,7 @@ describe("Stack", () => {
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
-      yield* stack.sync();
+      yield* stack.sync({ apply: true });
       const items = yield* stack.last();
 
       expect(items[0]?.startsWith("last mutation: ")).toBe(true);
@@ -3554,7 +3554,7 @@ describe("Stack", () => {
 
       const items = yield* Effect.gen(function* () {
         const stack = yield* Stack;
-        return yield* stack.sync();
+        return yield* stack.sync({ apply: true });
       }).pipe(Effect.provide(layer));
 
       expect(items).not.toContain("rebase stack-b onto dev");
@@ -3602,7 +3602,7 @@ describe("Stack", () => {
 
       const items = yield* Effect.gen(function* () {
         const stack = yield* Stack;
-        return yield* stack.sync();
+        return yield* stack.sync({ apply: true });
       }).pipe(Effect.provide(scenario.layer));
 
       expect(items).not.toContain("rebase stack-2 onto dev");
@@ -3646,8 +3646,8 @@ describe("Stack", () => {
 
       const result = yield* Effect.gen(function* () {
         const stack = yield* Stack;
-        const first = yield* stack.sync();
-        const second = yield* stack.sync();
+        const first = yield* stack.sync({ apply: true });
+        const second = yield* stack.sync({ apply: true });
         return { first, second };
       }).pipe(Effect.provide(scenario.layer));
 
@@ -3693,7 +3693,7 @@ describe("Stack", () => {
       const result = yield* Effect.gen(function* () {
         const stack = yield* Stack;
         const store = yield* Store;
-        const items = yield* stack.sync();
+        const items = yield* stack.sync({ apply: true });
         const state = yield* store.read();
         const undo = yield* store.readUndo();
         return { items, state, undo };
@@ -3740,7 +3740,7 @@ describe("Stack", () => {
         const stack = yield* Stack;
         const store = yield* Store;
         let failed = false;
-        yield* stack.sync().pipe(
+        yield* stack.sync({ apply: true }).pipe(
           Effect.catch((err) =>
             Effect.sync(() => {
               failed = true;
@@ -3793,7 +3793,7 @@ describe("Stack", () => {
 
       const result = yield* Effect.gen(function* () {
         const stack = yield* Stack;
-        yield* stack.sync();
+        yield* stack.sync({ apply: true });
         const repaired = yield* scenario.git(["rev-parse", "stack-c"]);
         yield* stack.undo(true);
         const restored = yield* scenario.git(["rev-parse", "stack-c"]);

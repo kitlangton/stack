@@ -9,8 +9,8 @@
 
 ## Safety rules
 
-- `stack sync --dry-run` must stay non-mutating, including scoped and keep-going runs.
-- History-rewriting commands need an explicit mutating mode: `--apply`, or `merge --auto` for code-host auto-merge plus descendant repair.
+- Bare `stack sync` must stay non-mutating, including scoped and keep-going runs.
+- Mutating commands need an explicit mode: `--apply`, or `merge --auto` for code-host auto-merge plus descendant repair.
 - Never mutate trunk branches like `dev`, `main`, or `master`.
 - Before rebasing a branch, create a local backup branch.
 - Before repair mutates Git or a hosted change, save an undo checkpoint. Merge child retargets use a pre-merge recovery journal; after the root lands, descendant repair starts from a post-merge baseline that never retargets children back onto the landed branch.
@@ -22,10 +22,10 @@
 - `guide` prints the opinionated happy path for agents and humans.
 - `doctor` checks Git, code-host access, stack metadata, trunks, and undo journal health without mutating anything.
 - `track` records parentage for an existing branch only when change target branches do not already encode the stack.
-- `sync --dry-run [branch]` previews target-branch inference, stale metadata cleanup, and repairs without mutating branches, requests, or stack metadata using the tree summary output.
-- `sync [branch]` is the common safe workflow: remove stale local links, infer clear target-branch stack links, repair branches, retarget requests, refresh links, and show a concise tree summary. With a branch argument, sync only the stack containing that branch.
+- `sync [branch]` previews target-branch inference, stale metadata cleanup, and repairs without mutating branches, requests, or stack metadata using the tree summary output.
+- `sync --apply [branch]` applies the common maintenance workflow: remove stale local links, infer clear target-branch stack links, repair branches, retarget requests, refresh links, and show a concise tree summary. With a branch argument, sync only the stack containing that branch.
 - `sync` with no branch scopes to the current stack when the current branch is stack-relevant; when off-stack, it keeps the repo-wide behavior.
-- `sync --continue-on-failure` / `sync --keep-going` processes independent stacks, reports succeeded and failed stacks, preserves per-stack cleanup output, and exits nonzero if any stack failed.
+- `sync --apply --continue-on-failure` / `sync --apply --keep-going` processes independent stacks, reports succeeded and failed stacks, preserves per-stack cleanup output, and exits nonzero if any stack failed.
 - `sync` should not auto-track standalone trunk-root requests; infer a trunk-root request only when another open request is based on it.
 - `merge` merges the oldest branch in a stack and immediately repairs descendants; when no branch is given, it infers the root from the current branch. It retargets immediate child requests before merge to preserve open work in auto-delete repos.
 - `merge --auto` retargets immediate child requests, enables code-host auto-merge, waits for merge, then repairs descendants.

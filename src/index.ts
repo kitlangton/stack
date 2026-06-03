@@ -1,7 +1,10 @@
 export * from "./domain/model.ts";
 export * from "./format.ts";
 export * from "./services/Config.ts";
-export * as Git from "./services/Git.ts";
-export * as GitHub from "./services/GitHub.ts";
+export { CodeHost } from "./services/CodeHost.ts";
+export { CodeHostGitHub } from "./services/code-host/GitHub.ts";
+export { CodeHostGitLab } from "./services/code-host/GitLab.ts";
+export { Git } from "./services/Git.ts";
+export { GitHub } from "./services/GitHub.ts";
 export * from "./services/Stack.ts";
 export * from "./services/Store.ts";

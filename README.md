@@ -9,11 +9,19 @@ dev
 ╰───────────╯
 ```
 
-Squash-safe stacked PRs for GitHub repos that squash-merge and delete branches.
+Squash-safe stacked PRs / MRs for GitHub and GitLab repos that squash-merge and
+delete branches.
 
-`stack` preserves stack intent locally, infers obvious relationships from PR
-bases, and repairs descendants after parent changes or merges so open PRs keep
-their comments, reviews, and context.
+`stack` preserves stack intent locally, infers obvious relationships from PR /
+MR target branches, and repairs descendants after parent changes or merges so
+open changes keep their comments, reviews, and context.
+
+Works against GitHub (via the `gh` CLI) and GitLab (via the `glab` CLI).
+Install and authenticate the matching CLI before running `stack`. The
+`github.com` and `gitlab.com` hosts are detected automatically from `origin`. For an
+enterprise host, configure the repository once with `git config stack.codeHost
+github` or `git config stack.codeHost gitlab`; use `STACK_CODE_HOST` as a
+temporary override.
 
 ## Install
 
@@ -79,10 +87,20 @@ Undo:
 Each PR gets a compact GitHub-native stack block:
 
 ```md
-### Stack
+### [Stack](https://github.com/kitlangton/stack)
 
 1. #101
 2. **#102** 👈 current
+```
+
+GitLab MR descriptions use native `!101` references plus titles, because bare
+GitLab MR autolinks only show the title on hover:
+
+```md
+### [Stack](https://github.com/kitlangton/stack)
+
+1. !101 - Schema source
+2. **!102 - OpenAPI output** 👈 current
 ```
 
 When the first PR is ready, the agent previews and merges the root:
@@ -108,7 +126,7 @@ The child PR keeps its comments and reviews. Its stack block becomes history plu
 the current PR:
 
 ```md
-### Stack
+### [Stack](https://github.com/kitlangton/stack)
 
 1. #101
 2. **#102** 👈 current
@@ -117,19 +135,19 @@ the current PR:
 ## Commands
 
 ```bash
-stack status             # local tracked stack, no GitHub API call
-stack sync --dry-run     # preview GitHub PR-base inference and repairs
-stack sync               # record inferred links, repair, and refresh PR bodies
+stack status             # local tracked stack plus available host details
+stack sync --dry-run     # preview target-branch inference and repairs
+stack sync               # record inferred links, repair, and refresh descriptions
 stack sync <branch>      # sync only the stack containing branch
 stack sync --keep-going  # process independent stacks and report failures at end
 stack merge              # dry-run the next root merge
 stack merge --apply      # merge root and repair descendants
-stack merge --auto       # wait for GitHub requirements, then merge and repair
-stack merge --auto --through <branch-or-pr>
+stack merge --auto       # wait for host requirements, then merge and repair
+stack merge --auto --through <branch-or-change>
                           # auto-merge roots one at a time through a target
 ```
 
-When a parent PR branch changes, run `stack sync --dry-run` and then `stack sync`.
+When a parent change branch changes, run `stack sync --dry-run` and then `stack sync`.
 From a stack branch, bare `stack sync` scopes to that stack; from off-stack it
 keeps the repo-wide behavior. Use `stack sync <branch>` to force one stack, or
 `stack sync --continue-on-failure` / `stack sync --keep-going` to process

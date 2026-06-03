@@ -1,11 +1,13 @@
 {
   "name": "@kitlangton/stack",
   "version": "0.1.5",
-  "description": "Squash-safe stacked PR repair CLI",
+  "description": "Squash-safe stacked PR/MR repair CLI for GitHub and GitLab",
   "keywords": [
     "cli",
     "git",
     "github",
+    "gitlab",
+    "merge-requests",
     "node",
     "pull-requests",
     "stacked-prs"

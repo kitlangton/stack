@@ -60,7 +60,10 @@ export const treeFromStatus = (report: StatusReport): StatusTree => {
   const nodes = new Map(report.nodes.map((node) => [String(node.branch), node]));
   const roots = new Array<string>();
   const children = new Map<string, Array<string>>();
-  const trunk = String(report.trunks[0] ?? "root");
+  const referencedTrunk = report.trunks.find((name) =>
+    report.nodes.some((node) => node.parent !== null && String(node.parent) === String(name)),
+  );
+  const trunk = String(referencedTrunk ?? report.trunks[0] ?? "root");
 
   for (const node of report.nodes) {
     const branch = String(node.branch);

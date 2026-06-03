@@ -10,6 +10,10 @@ import { StackConfig } from "./Config.ts";
 export interface Interface {
   readonly dirty: () => Effect.Effect<ReadonlyArray<string>, ExecError>;
   readonly fetch: () => Effect.Effect<void, ExecError>;
+  readonly remotes: () => Effect.Effect<
+    ReadonlyArray<{ readonly name: string; readonly url: string }>,
+    ExecError
+  >;
   readonly refs: () => Effect.Effect<ReadonlyArray<BranchRef>, ExecError>;
   readonly current: () => Effect.Effect<string, ExecError>;
   readonly remote: () => Effect.Effect<Option.Option<string>, ExecError>;
@@ -36,7 +40,7 @@ export interface Interface {
   readonly backup: (branch: string, name: string) => Effect.Effect<void, ExecError>;
   readonly drop: (branch: string) => Effect.Effect<void, ExecError>;
   readonly restore: (branch: string, name: string) => Effect.Effect<void, ExecError>;
-  readonly push: (branch: string) => Effect.Effect<void, ExecError>;
+  readonly push: (branch: string, remote?: string) => Effect.Effect<void, ExecError>;
 }
 
 export class Service extends Context.Service<Service, Interface>()("@stack/Git") {}
@@ -86,6 +90,19 @@ export const live = Layer.effect(
     );
     const fetch = Effect.fn("Git.fetch")(() =>
       run("git", ["fetch", "origin", "--prune"]).pipe(Effect.asVoid),
+    );
+    const remotes = Effect.fn("Git.remotes")(() =>
+      run("git", ["remote", "-v"], [0, 1]).pipe(
+        Effect.map((out) => {
+          const map = new Map<string, string>();
+          for (const line of out.split("\n").filter(Boolean)) {
+            const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+            if (!match) continue;
+            if (match[3] === "push" || !map.has(match[1]!)) map.set(match[1]!, match[2]!);
+          }
+          return [...map].map(([name, url]) => ({ name, url }));
+        }),
+      ),
     );
     const head = Effect.fn("Git.head")((name: string) =>
       run("git", ["rev-parse", "--verify", name], [0, 1]).pipe(
@@ -164,11 +181,17 @@ export const live = Layer.effect(
     const restore = Effect.fn("Git.restore")((branch: string, name: string) =>
       run("git", ["branch", "-f", branch, name]).pipe(Effect.asVoid),
     );
-    const push = Effect.fn("Git.push")((branch: string) =>
-      run("git", ["push", "--force-with-lease", "-u", "origin", branch]).pipe(Effect.asVoid),
+    const push = Effect.fn("Git.push")((branch: string, remote = "origin") =>
+      remote === "origin"
+        ? run("git", ["push", "--force-with-lease", "-u", remote, branch]).pipe(Effect.asVoid)
+        : run("git", ["fetch", remote, "--prune"]).pipe(
+            Effect.flatMap(() => run("git", ["push", "--force-with-lease", remote, branch])),
+            Effect.asVoid,
+          ),
     );
     return Service.of({
       fetch,
+      remotes,
       dirty,
       refs,
       current,
@@ -199,6 +222,7 @@ export const test = (opts: {
       fetch: () => Effect.void,
       dirty: () => Effect.succeed([]),
       refs: () => Effect.succeed(opts.refs ?? []),
+      remotes: () => Effect.succeed([]),
       current: () => Effect.succeed(opts.current ?? ""),
       remote: () => Effect.succeed(Option.fromNullishOr(opts.remote)),
       switch: () => Effect.void,
@@ -222,3 +246,5 @@ export const test = (opts: {
       push: () => Effect.void,
     }),
   );
+
+export * as Git from "./Git.ts";

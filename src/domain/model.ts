@@ -35,6 +35,7 @@ export class PullRef extends Schema.Class<PullRef>("PullRef")({
   number: PrNumber,
   title: Schema.NullOr(Schema.String),
   head: BranchName,
+  headRepository: Schema.NullOr(Schema.String),
   base: BranchName,
   url: PullUrl,
   draft: Schema.Boolean,
@@ -50,6 +51,7 @@ export class PullMeta extends Schema.Class<PullMeta>("PullMeta")({
   title: Schema.String,
   body: Schema.String,
   head: BranchName,
+  headRepository: Schema.NullOr(Schema.String),
   base: BranchName,
   url: PullUrl,
   draft: Schema.Boolean,
@@ -62,6 +64,7 @@ export class StackLink extends Schema.Class<StackLink>("StackLink")({
   parent: BranchName,
   anchor: Schema.String,
   pr: Schema.NullOr(PrNumber),
+  headRepository: Schema.optional(Schema.NullOr(Schema.String)),
 }) {}
 
 export class StackState extends Schema.Class<StackState>("StackState")({
@@ -75,6 +78,7 @@ export class UndoEntry extends Schema.Class<UndoEntry>("UndoEntry")({
   pr: Schema.NullOr(PrNumber),
   base: Schema.NullOr(BranchName),
   created: Schema.NullOr(PrNumber),
+  pushRemotes: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
 export class UndoState extends Schema.Class<UndoState>("UndoState")({
@@ -203,9 +207,10 @@ export class StackOperationError extends Schema.TaggedErrorClass<StackOperationE
   }
 }
 
-export class GitHubDecodeError extends Schema.TaggedErrorClass<GitHubDecodeError>()(
-  "GitHubDecodeError",
+export class CodeHostDecodeError extends Schema.TaggedErrorClass<CodeHostDecodeError>()(
+  "CodeHostDecodeError",
   {
+    tool: Schema.String,
     args: Schema.Array(Schema.String),
     output: Schema.String,
     detail: Schema.String,
@@ -213,24 +218,60 @@ export class GitHubDecodeError extends Schema.TaggedErrorClass<GitHubDecodeError
   },
 ) {
   constructor(
+    readonly tool: string,
     readonly args: ReadonlyArray<string>,
     readonly output: string,
     readonly detail: string,
   ) {
     super({
+      tool,
       args: Array.from(args),
       output,
       detail,
-      message: `gh ${args.join(" ")} returned invalid JSON`,
+      message: `${tool} ${args.join(" ")} returned invalid JSON`,
     });
   }
 }
 
+export class CodeHostChangeNotFoundError extends Schema.TaggedErrorClass<CodeHostChangeNotFoundError>()(
+  "CodeHostChangeNotFoundError",
+  {
+    number: Schema.Number,
+    message: Schema.String,
+  },
+) {
+  constructor(readonly number: number) {
+    super({ number, message: `change ${number} was not found` });
+  }
+}
+
+export class UnsupportedCodeHostOperation extends Schema.TaggedErrorClass<UnsupportedCodeHostOperation>()(
+  "UnsupportedCodeHostOperation",
+  {
+    provider: Schema.String,
+    operation: Schema.String,
+    message: Schema.String,
+  },
+) {
+  constructor(
+    readonly provider: string,
+    readonly operation: string,
+  ) {
+    super({ provider, operation, message: `${operation} is not supported by ${provider}` });
+  }
+}
+
 export type StoreError = StateError;
-export type GitHubError = ExecError | GitHubDecodeError;
+export type CodeHostError =
+  | ExecError
+  | CodeHostDecodeError
+  | CodeHostChangeNotFoundError
+  | UnsupportedCodeHostOperation;
 export type StackError =
   | ExecError
-  | GitHubDecodeError
+  | CodeHostDecodeError
+  | CodeHostChangeNotFoundError
+  | UnsupportedCodeHostOperation
   | StateError
   | BranchError
   | MergeBaseError
@@ -247,6 +288,7 @@ export const pullRef = (value: {
   number: number;
   title?: string | null;
   head: string;
+  headRepository?: string | null;
   base: string;
   url: string;
   draft: boolean;
@@ -256,6 +298,7 @@ export const pullRef = (value: {
     number: prNumber(value.number),
     title: value.title ?? null,
     head: branchName(value.head),
+    headRepository: value.headRepository ?? null,
     base: branchName(value.base),
     url: pullUrl(value.url),
     draft: value.draft,
@@ -267,6 +310,7 @@ export const pullMeta = (value: {
   title: string;
   body: string;
   head: string;
+  headRepository?: string | null;
   base: string;
   url: string;
   draft: boolean;
@@ -278,6 +322,7 @@ export const pullMeta = (value: {
     title: value.title,
     body: value.body,
     head: branchName(value.head),
+    headRepository: value.headRepository ?? null,
     base: branchName(value.base),
     url: pullUrl(value.url),
     draft: value.draft,
@@ -290,12 +335,14 @@ export const stackLink = (value: {
   parent: string;
   anchor: string;
   pr: number | null;
+  headRepository?: string | null;
 }) =>
   new StackLink({
     branch: branchName(value.branch),
     parent: branchName(value.parent),
     anchor: value.anchor,
     pr: value.pr === null ? null : prNumber(value.pr),
+    ...(value.headRepository === undefined ? {} : { headRepository: value.headRepository }),
   });
 
 export const undoEntry = (value: {
@@ -304,6 +351,7 @@ export const undoEntry = (value: {
   pr: number | null;
   base: string | null;
   created: number | null;
+  pushRemotes?: ReadonlyArray<string>;
 }) =>
   new UndoEntry({
     branch: branchName(value.branch),
@@ -311,6 +359,7 @@ export const undoEntry = (value: {
     pr: value.pr === null ? null : prNumber(value.pr),
     base: value.base === null ? null : branchName(value.base),
     created: value.created === null ? null : prNumber(value.created),
+    ...(value.pushRemotes === undefined ? {} : { pushRemotes: Array.from(value.pushRemotes) }),
   });
 
 export const undoState = (

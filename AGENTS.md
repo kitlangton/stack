@@ -2,7 +2,7 @@
 
 ## Intent
 
-- `stack` is a small, local-first CLI for stacked PR repair in squash-merge repos.
+- `stack` is a small, local-first CLI for stacked PR/MR repair in squash-merge repos.
 - Use the latest Effect v4 beta / effect-smol APIs throughout this project.
 - Normal editing and commits stay plain git.
 - Stack commands are only for stack intent, sync, merge, and undo workflows.
@@ -10,24 +10,25 @@
 ## Safety rules
 
 - `stack sync --dry-run` must stay non-mutating, including scoped and keep-going runs.
-- History-rewriting commands need an explicit mutating mode: `--apply`, or `merge --auto` for GitHub auto-merge plus descendant repair.
+- History-rewriting commands need an explicit mutating mode: `--apply`, or `merge --auto` for code-host auto-merge plus descendant repair.
 - Never mutate trunk branches like `dev`, `main`, or `master`.
 - Before rebasing a branch, create a local backup branch.
+- Before repair mutates Git or a hosted change, save an undo checkpoint. Merge child retargets use a pre-merge recovery journal; after the root lands, descendant repair starts from a post-merge baseline that never retargets children back onto the landed branch.
 - `stack undo` should restore the last applied mutation from the saved journal.
 
 ## Current commands
 
-- `status` shows the relevant tracked stack, including open PR titles when GitHub is available.
+- `status` shows the relevant tracked stack, including open change titles when the code host is available.
 - `guide` prints the opinionated happy path for agents and humans.
-- `track` records parentage for an existing branch only when PR bases do not already encode the stack.
-- `sync --dry-run [branch]` previews GitHub PR-base inference, stale metadata cleanup, and repairs without mutating branches, PRs, or stack metadata using the tree summary output.
-- `sync [branch]` is the common safe workflow: remove stale local links, infer clear PR-base stack links, repair branches, retarget PRs, refresh links, and show a concise tree summary. With a branch argument, sync only the stack containing that branch.
+- `track` records parentage for an existing branch only when change target branches do not already encode the stack.
+- `sync --dry-run [branch]` previews target-branch inference, stale metadata cleanup, and repairs without mutating branches, requests, or stack metadata using the tree summary output.
+- `sync [branch]` is the common safe workflow: remove stale local links, infer clear target-branch stack links, repair branches, retarget requests, refresh links, and show a concise tree summary. With a branch argument, sync only the stack containing that branch.
 - `sync` with no branch scopes to the current stack when the current branch is stack-relevant; when off-stack, it keeps the repo-wide behavior.
 - `sync --continue-on-failure` / `sync --keep-going` processes independent stacks, reports succeeded and failed stacks, preserves per-stack cleanup output, and exits nonzero if any stack failed.
-- `sync` should not auto-track standalone trunk-root PRs; infer a trunk-root PR only when another open PR is based on it.
-- `merge` merges the oldest branch in a stack and immediately repairs descendants; when no branch is given, it infers the root from the current branch. It retargets immediate child PRs before merge to preserve open PRs in auto-delete repos.
-- `merge --auto` retargets immediate child PRs, enables GitHub auto-merge, waits for merge, then repairs descendants.
-- `merge --auto --through <branch-or-pr>` repeats root auto-merge and descendant repair until the target branch or PR has landed.
+- `sync` should not auto-track standalone trunk-root requests; infer a trunk-root request only when another open request is based on it.
+- `merge` merges the oldest branch in a stack and immediately repairs descendants; when no branch is given, it infers the root from the current branch. It retargets immediate child requests before merge to preserve open work in auto-delete repos.
+- `merge --auto` retargets immediate child requests, enables code-host auto-merge, waits for merge, then repairs descendants.
+- `merge --auto --through <branch-or-change>` repeats root auto-merge and descendant repair until the target branch or request has landed.
 - `history` explains the most recent applied sync from the undo journal.
 - `undo` restores the last applied sync.
 
@@ -36,8 +37,8 @@
 - Persist stack metadata in `.git/stack/state.json`.
 - Persist undo state in `.git/stack/undo.json`.
 - Prefer `Context.Service`-based Effect services and test-first changes.
-- Use OpenCode-style service modules for deep seams: export `Interface`, `Service`, and adapters like `layer`, `live`, or `memory`, then import them as namespaces.
-- Keep local Git behavior behind `Git` and pull-request behavior behind `GitHub`; stack orchestration should depend on both services rather than shelling out to `gh` directly.
+- Use OpenCode-style service modules for deep seams: export `Interface`, `Service`, adapters like `layer`, `live`, or `memory`, and a namespace self-reexport such as `export * as CodeHost from "./CodeHost.ts"`; consumers import that named namespace directly from the module file.
+- Keep local Git behavior behind `Git` and pull/merge-request behavior behind `CodeHost`. Concrete backends live in `services/code-host/GitHub.ts` (via `gh`) and `services/code-host/GitLab.ts` (via `glab`), while their in-memory contract behavior is shared through `services/code-host/Memory.ts`; the CLI picks one backend at startup from `STACK_CODE_HOST`, `git config stack.codeHost`, or an unambiguous `origin` host. Stack orchestration depends on `CodeHost.Service` rather than shelling out to a host CLI directly.
 - Check the local Effect source tree when available before changing Effect APIs or versions.
 - Prefer `effect/Path`, `effect/FileSystem`, and `effect/unstable/process` instead of Node/Bun built-ins in app code.
 - Keep logic literal and debuggable over clever abstractions.

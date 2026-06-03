@@ -4,6 +4,8 @@ import * as Terminal from "./terminal.ts";
 
 export interface RenderStatusOptions {
   readonly pretty?: boolean;
+  readonly reference?: (number: number) => string;
+  readonly requestLabel?: string;
 }
 
 const isBackup = (branch: string) => branch.startsWith("backup/");
@@ -66,6 +68,8 @@ const filterReport = (report: StatusReport) => {
 export const renderStatus = (report: StatusReport, opts: RenderStatusOptions = {}) => {
   const tree = treeFromStatus(filterReport(report));
   const style = { pretty: opts.pretty ?? false };
+  const reference = opts.reference ?? ((number: number) => `#${number}`);
+  const requestLabel = opts.requestLabel ?? "PR";
 
   const lines: Array<string> = [];
 
@@ -82,7 +86,7 @@ export const renderStatus = (report: StatusReport, opts: RenderStatusOptions = {
       ? Terminal.link(
           style,
           node.url ? String(node.url) : null,
-          Terminal.paint(style, Terminal.color.magenta, `#${node.pr}`),
+          Terminal.paint(style, Terminal.color.magenta, reference(Number(node.pr))),
         )
       : null;
     const url = node.url ? String(node.url) : null;
@@ -98,7 +102,7 @@ export const renderStatus = (report: StatusReport, opts: RenderStatusOptions = {
     lines.push(`${prefix}${connector} ${branch}${marker}${source}${issues}`);
     if (pr) {
       lines.push(
-        `${prefix}   PR: ${pr}${url ? ` ${Terminal.paint(style, Terminal.color.dim, url)}` : ""}`,
+        `${prefix}   ${requestLabel}: ${pr}${url ? ` ${Terminal.paint(style, Terminal.color.dim, url)}` : ""}`,
       );
     }
     if (node.title) {
@@ -136,13 +140,16 @@ export const renderStatus = (report: StatusReport, opts: RenderStatusOptions = {
   return lines.length > 0 ? lines.join("\n") : "(no matching stack branches)";
 };
 
-export const renderDiagram = (report: StatusReport) => {
+export const renderDiagram = (
+  report: StatusReport,
+  reference: (number: number) => string = (number) => `#${number}`,
+) => {
   const tree = treeFromStatus(report);
 
   const label = (name: string) => {
     const node = tree.nodes.get(name);
     if (!node) return name;
-    const pr = node.pr ? ` #${node.pr}` : "";
+    const pr = node.pr ? ` ${reference(Number(node.pr))}` : "";
     const current = node.branch === report.current ? " ← current" : "";
     const source = node.source === "inferred" ? " (inferred)" : "";
     const issues = node.issues.length > 0 ? ` [${node.issues.join(", ")}]` : "";

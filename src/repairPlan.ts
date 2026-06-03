@@ -6,6 +6,7 @@ export interface RebaseBranchPlan {
   readonly onto: string;
   readonly backup: string;
   readonly commits: ReadonlyArray<string>;
+  readonly pushRemotes: ReadonlyArray<string>;
 }
 
 export interface RetargetPullPlan {
@@ -25,7 +26,7 @@ export const rebaseBranch = (
 ): ReadonlyArray<StackResultItem> => [
   { _tag: "Backup", mode, branch: plan.branch, backup: plan.backup },
   { _tag: "Rebase", mode, branch: plan.branch, parent: plan.parent },
-  { _tag: "Push", mode, branch: plan.branch },
+  { _tag: "Push", mode, branch: plan.branch, remotes: plan.pushRemotes },
 ];
 
 export const retargetPull = (plan: RetargetPullPlan, mode: Mode): StackResultItem => ({

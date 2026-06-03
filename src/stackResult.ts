@@ -38,7 +38,12 @@ export type StackResultItem =
       readonly branch: string;
       readonly parent: string;
     }
-  | { readonly _tag: "Push"; readonly mode: Mode; readonly branch: string }
+  | {
+      readonly _tag: "Push";
+      readonly mode: Mode;
+      readonly branch: string;
+      readonly remotes: ReadonlyArray<string>;
+    }
   | {
       readonly _tag: "RetargetPull";
       readonly mode: Mode;
@@ -66,7 +71,11 @@ export const track = (link: StackLink): StackResultItem => ({
 
 const prefix = (mode: Mode) => (mode === "apply" ? "" : "would ");
 
-export const render = (item: StackResultItem) => {
+export const render = (
+  item: StackResultItem,
+  reference: (number: number) => string = (number) => `#${number}`,
+  requestLabel = "PR",
+) => {
   switch (item._tag) {
     case "Text":
       return item.text;
@@ -83,16 +92,22 @@ export const render = (item: StackResultItem) => {
     case "Rebase":
       return `${prefix(item.mode)}rebase ${item.branch} onto ${item.parent}`;
     case "Push":
-      return `${prefix(item.mode)}push ${item.branch}`;
+      return item.remotes.length === 1 && item.remotes[0] === "origin"
+        ? `${prefix(item.mode)}push ${item.branch}`
+        : `${prefix(item.mode)}push ${item.branch} to ${item.remotes.join(", ")}`;
     case "RetargetPull":
-      return `${prefix(item.mode)}retarget #${item.pr} to ${item.base}`;
+      return `${prefix(item.mode)}retarget ${reference(item.pr)} to ${item.base}`;
     case "CreatePull":
       return item.mode === "apply" && item.pr !== null
-        ? `create pr #${item.pr} for ${item.branch} -> ${item.base}`
-        : `would create pr for ${item.branch} -> ${item.base}`;
+        ? `create ${requestLabel.toLowerCase()} ${reference(item.pr)} for ${item.branch} -> ${item.base}`
+        : `would create ${requestLabel.toLowerCase()} for ${item.branch} -> ${item.base}`;
     case "UpdateStackLinks":
-      return `${item.mode === "apply" ? "update" : "would update"} PR body: #${item.pr} Stack block`;
+      return `${item.mode === "apply" ? "update" : "would update"} ${requestLabel} body: ${reference(item.pr)} Stack block`;
   }
 };
 
-export const renderAll = (items: ReadonlyArray<StackResultItem>) => items.map(render);
+export const renderAll = (
+  items: ReadonlyArray<StackResultItem>,
+  reference?: (number: number) => string,
+  requestLabel?: string,
+) => items.map((item) => render(item, reference, requestLabel));

@@ -14,8 +14,10 @@ import { BranchError, DirtyWorktreeError, ExecError, MergeBaseError } from "./do
 import { renderStatus } from "./format.ts";
 import * as Proc from "./platform/proc.ts";
 import { StackConfig, trunks } from "./services/Config.ts";
-import * as Git from "./services/Git.ts";
-import * as GitHub from "./services/GitHub.ts";
+import { CodeHost } from "./services/CodeHost.ts";
+import { CodeHostGitHub } from "./services/code-host/GitHub.ts";
+import { CodeHostGitLab } from "./services/code-host/GitLab.ts";
+import { Git } from "./services/Git.ts";
 import * as Progress from "./services/Progress.ts";
 import { Stack } from "./services/Stack.ts";
 import { Store } from "./services/Store.ts";
@@ -27,25 +29,25 @@ const apply = Flag.boolean("apply").pipe(
 
 const auto = Flag.boolean("auto").pipe(
   Flag.withDescription(
-    "Enable GitHub auto-merge for the root PR, wait until it merges, then repair descendants automatically.",
+    "Enable code-host auto-merge for the root change, wait until it merges, then repair descendants automatically.",
   ),
 );
 
 const admin = Flag.boolean("admin").pipe(
   Flag.withDescription(
-    "Use GitHub administrator privileges to merge immediately. Requires --apply.",
+    "Use administrator privileges to merge immediately, bypassing protection rules. Requires --apply. GitHub only.",
   ),
 );
 
 const through = Flag.string("through").pipe(
   Flag.withDescription(
-    "With --auto, keep merging stack roots until this branch or PR number has landed.",
+    "With --auto, keep merging stack roots until this branch or change number has landed.",
   ),
   Flag.optional,
 );
 
 const dryRun = Flag.boolean("dry-run").pipe(
-  Flag.withDescription("Preview the sync workflow without changing branches or PRs."),
+  Flag.withDescription("Preview the sync workflow without changing branches or changes."),
 );
 
 const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
@@ -55,11 +57,11 @@ const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
   ),
 );
 
-const guide = `Happy path for stacked PRs
+const guide = `Happy path for stacked changes (GitHub PRs / GitLab MRs)
 
-1. Create PRs with the right GitHub bases.
-   - Root PR: base is trunk, for example dev or main.
-   - Child PR: base is the parent branch.
+1. Open the changes with the right target branches.
+   - Root change: target is trunk, for example dev or main.
+   - Child change: target is the parent branch.
 
 2. Preview what stack will infer and repair.
    stack sync --dry-run
@@ -68,20 +70,31 @@ const guide = `Happy path for stacked PRs
    stack sync
 
 Use stack status to verify the relevant tracked stack. It hides backup branches,
-focuses on the current stack instead of listing every local branch, and includes
-open PR details when GitHub is available.`;
+focuses on the current stack instead of listing every local branch, and
+includes open change details when the code host CLI (gh or glab) is available.
+
+Code host selection: github.com and gitlab.com are detected automatically. For
+enterprise hosts, run git config stack.codeHost github|gitlab. The temporary
+STACK_CODE_HOST=github|gitlab environment override takes precedence.`;
 
 const statusCommand = Command.make(
   "status",
   {},
   Effect.fn(function* () {
     const stack = yield* Stack;
+    const codeHost = yield* CodeHost.Service;
     const report = yield* stack.status();
-    yield* Console.log(renderStatus(report, { pretty: true }));
+    yield* Console.log(
+      renderStatus(report, {
+        pretty: true,
+        reference: codeHost.reference,
+        requestLabel: codeHost.requestLabel,
+      }),
+    );
   }),
 ).pipe(
   Command.withDescription(
-    "Show the relevant tracked stack. Use sync --dry-run to preview PR-base inference and repairs.",
+    "Show the relevant tracked stack. Use sync --dry-run to preview target-branch inference and repairs.",
   ),
 );
 
@@ -93,7 +106,7 @@ const guideCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Show the opinionated happy path for agents and humans using stacked PRs.",
+    "Show the opinionated happy path for agents and humans using stacked changes.",
   ),
 );
 
@@ -113,7 +126,7 @@ const trackCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Manually record stack intent only when PR bases do not already encode the stack.",
+    "Manually record stack intent only when change target branches do not already encode the stack.",
   ),
   Command.withExamples([
     {
@@ -142,12 +155,12 @@ const syncCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Infer stack links from GitHub PR bases, clean stale metadata, repair branches, retarget PRs, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. Add --dry-run to preview without changing anything.",
+    "Infer stack links from code-host target branches (GitHub PRs / GitLab MRs), clean stale metadata, repair branches, retarget changes, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. Add --dry-run to preview without changing anything.",
   ),
   Command.withExamples([
     {
       command: "stack sync --dry-run",
-      description: "Preview inferred stack links and repairs without changing branches or PRs",
+      description: "Preview inferred stack links and repairs without changing branches or changes",
     },
     {
       command: "stack sync effectify-watcher",
@@ -174,7 +187,7 @@ const doctorCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Check local Git, GitHub, stack metadata, trunk branches, and undo journal health without changing anything.",
+    "Check local Git, code host (GitHub or GitLab), stack metadata, trunk branches, and undo journal health without changing anything.",
   ),
 );
 
@@ -200,7 +213,7 @@ const mergeCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Merge the oldest branch in a stack, preserve a local backup branch, repair descendants, and print the next root branch. If branch is omitted, infer the root from the current branch. By default this is a dry run. Add --apply to merge immediately, --apply --admin to force with admin privileges, or --auto to enable GitHub auto-merge and wait until it lands before repairing descendants. Add --auto --through <branch-or-pr> for a bounded range.",
+    "Merge the oldest branch in a stack, preserve a local backup branch, repair descendants, and print the next root branch. If branch is omitted, infer the root from the current branch. By default this is a dry run. Add --apply to merge immediately, --apply --admin to force with admin privileges (GitHub only), or --auto to enable code-host auto-merge and wait until it lands before repairing descendants. Add --auto --through <branch-or-change> for a bounded range.",
   ),
   Command.withExamples([
     {
@@ -213,11 +226,11 @@ const mergeCommand = Command.make(
     },
     {
       command: "stack merge effectify-watcher --apply",
-      description: "Merge the root PR, repair descendants, and print the next root branch",
+      description: "Merge the root change, repair descendants, and print the next root branch",
     },
     {
       command: "stack merge effectify-watcher --auto",
-      description: "Wait for GitHub requirements, then merge and repair descendants",
+      description: "Wait for code-host merge requirements, then merge and repair descendants",
     },
     {
       command: "stack merge --auto --through effectify-format",
@@ -225,7 +238,7 @@ const mergeCommand = Command.make(
     },
     {
       command: "stack merge effectify-watcher --apply --admin",
-      description: "Force-merge the root PR with admin privileges, then repair descendants",
+      description: "Force-merge the root GitHub PR with admin privileges, then repair descendants",
     },
   ]),
 );
@@ -254,7 +267,7 @@ const undoCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Restore the last applied mutation using backup branches and the saved metadata snapshot. By default this is a dry run. Add --apply to actually restore branches, push them, close created PRs, and restore stored metadata.",
+    "Restore the last applied mutation using backup branches and the saved metadata snapshot. By default this is a dry run. Add --apply to actually restore branches, push them, close created changes, and restore stored metadata.",
   ),
   Command.withExamples([
     {
@@ -263,23 +276,24 @@ const undoCommand = Command.make(
     },
     {
       command: "stack undo --apply",
-      description: "Restore branch tips, PR bases, and metadata from the last mutation journal",
+      description:
+        "Restore branch tips, target branches, and metadata from the last mutation journal",
     },
   ]),
 );
 
 const cli = Command.make("stack").pipe(
   Command.withDescription(
-    "A squash-safe stacked PR CLI. Use plain git for normal editing and commits, then use stack to track branch relationships, inspect the graph, sync after parent changes, merge stack roots, and undo the last mutation if needed.",
+    "A squash-safe stacked change CLI. Use plain git for normal editing and commits, then use stack to track branch relationships, inspect the graph, sync after parent changes, merge stack roots, and undo the last mutation if needed.",
   ),
   Command.withExamples([
     {
       command: "stack guide",
-      description: "Show the recommended stacked PR workflow",
+      description: "Show the recommended stacked change workflow",
     },
     {
       command: "stack sync --dry-run",
-      description: "Preview inferred stack links from PR bases",
+      description: "Preview inferred stack links from code-host target branches",
     },
     {
       command: "stack sync",
@@ -330,27 +344,62 @@ const live = (() => {
   ).pipe(Layer.provideMerge(proc));
 
   const git = Git.live.pipe(Layer.provide(cfg));
-  const github = GitHub.layer.pipe(Layer.provide(cfg));
+  const codeHost = Layer.unwrap(
+    Effect.gen(function* () {
+      const proc = yield* Proc.Service;
+      const cfgValue = yield* StackConfig;
+      const remoteOut = yield* proc
+        .exec(cfgValue.root, "git", ["remote", "get-url", "origin"], [0, 1])
+        .pipe(Effect.catch(() => Effect.succeed("")));
+      const configuredOut = yield* proc.exec(
+        cfgValue.root,
+        "git",
+        ["config", "--get", "stack.codeHost"],
+        [0, 1],
+      );
+      const envValue = process.env.STACK_CODE_HOST;
+      const explicitValue = envValue ?? (configuredOut || undefined);
+      const explicit = CodeHost.providerFrom(explicitValue);
+      if (explicitValue && !explicit) {
+        return yield* Effect.fail(
+          new Error(`invalid code host '${explicitValue}'; expected github or gitlab`),
+        );
+      }
+      const detected = remoteOut ? CodeHost.detectProvider(remoteOut) : null;
+      const provider = explicit ?? detected;
+      if (!provider) {
+        return yield* Effect.fail(
+          new Error(
+            "unable to determine the code host; configure it with: git config stack.codeHost github|gitlab",
+          ),
+        );
+      }
+      return provider === "gitlab" ? CodeHostGitLab.layer : CodeHostGitHub.layer;
+    }),
+  ).pipe(Layer.provide(cfg));
   const store = Store.live.pipe(Layer.provideMerge(cfg));
   return Stack.layer.pipe(
     Layer.provideMerge(cfg),
     Layer.provideMerge(git),
-    Layer.provideMerge(github),
+    Layer.provideMerge(codeHost),
     Layer.provideMerge(Progress.live),
     Layer.provideMerge(store),
   );
 })();
 
-const docs = Layer.succeed(Stack, {
-  status: () => Effect.die("help-only"),
-  adopt: () => Effect.die("help-only"),
-  land: () => Effect.die("help-only"),
-  links: () => Effect.die("help-only"),
-  sync: () => Effect.die("help-only"),
-  doctor: () => Effect.die("help-only"),
-  last: () => Effect.die("help-only"),
-  undo: () => Effect.die("help-only"),
-});
+const docs = Layer.mergeAll(
+  Layer.succeed(Stack, {
+    status: () => Effect.die("help-only"),
+    adopt: () => Effect.die("help-only"),
+    land: () => Effect.die("help-only"),
+    links: () => Effect.die("help-only"),
+    sync: () => Effect.die("help-only"),
+    doctor: () => Effect.die("help-only"),
+    last: () => Effect.die("help-only"),
+    undo: () => Effect.die("help-only"),
+  }),
+  CodeHostGitHub.memory(),
+);
 
 const isShowHelp = (err: unknown): err is CliError.ShowHelp =>
   CliError.isCliError(err) && err._tag === "ShowHelp";

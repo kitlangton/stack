@@ -84,20 +84,9 @@ Undo:
   stack undo --apply
 ```
 
-Each PR gets a compact GitHub-native stack block:
-
-### [Stack](https://github.com/kitlangton/stack)
-
-1. #101
-2. **#102** 👈 current
-
-GitLab MR descriptions use native `!101` references plus titles, because bare
-GitLab MR autolinks only show the title on hover:
-
-### [Stack](https://github.com/kitlangton/stack)
-
-1. !101 - Schema source
-2. **!102 - OpenAPI output** 👈 current
+Each PR/MR gets a stack block in its description. GitHub blocks stay compact
+with native `#101` references. GitLab blocks use native `!101` references plus
+titles, because bare GitLab MR autolinks only show the title on hover.
 
 When the first PR is ready, the agent previews and merges the root:
 
@@ -119,12 +108,14 @@ remaining branches and refreshes stack blocks.
 ```
 
 The child PR keeps its comments and reviews. Its stack block becomes history plus
-the current PR:
+the current PR. On GitLab, the same block includes MR titles beside each `!N`.
 
+```md
 ### [Stack](https://github.com/kitlangton/stack)
 
 1. #101
 2. **#102** 👈 current
+```
 
 ## Commands
 

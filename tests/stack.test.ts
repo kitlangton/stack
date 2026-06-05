@@ -661,7 +661,7 @@ Footer
             }),
           body: (pr: number, body: string) =>
             Effect.sync(() => {
-              seen.push(`body ${pr} ${body.includes("### [Stack]")}`);
+              seen.push(`body ${pr} ${body.includes("### Stack")}`);
               bodies.set(pr, body);
               const current = metas.get(pr)!;
               metas.set(
@@ -884,7 +884,7 @@ const makeLand = (
               );
             }),
           body: (pr: number, body: string) =>
-            Effect.sync(() => void seen.push(`body ${pr} ${body.includes("### [Stack]")}`)),
+            Effect.sync(() => void seen.push(`body ${pr} ${body.includes("### Stack")}`)),
           close: () => Effect.void,
           create: (
             branch: string,
@@ -2767,7 +2767,8 @@ describe("Stack", () => {
       expect(body.match(/<!-- stack:links:start -->/g)).toHaveLength(1);
       expect(body.match(/<!-- stack:links:end -->/g)).toHaveLength(1);
       expect(body).not.toContain("old stack block");
-      expect(body).toContain("### [Stack](https://github.com/kitlangton/stack)");
+      expect(body).toContain("### Stack");
+      expect(body).not.toContain("https://github.com/kitlangton/stack");
     }).pipe(Effect.provide(test.layer));
   });
 
@@ -4355,7 +4356,7 @@ describe("StackBlock", () => {
     const previous = `body before
 
 <!-- stack:links:start -->
-### [Stack](https://github.com/kitlangton/stack)
+### Stack
 
 1. !1
 2. !2 - Already titled
@@ -4384,7 +4385,7 @@ describe("StackBlock", () => {
     const previous = `body before
 
 <!-- stack:links:start -->
-### [Stack](https://github.com/kitlangton/stack)
+### Stack
 
 1. !1
 2. !2
@@ -4405,7 +4406,7 @@ describe("StackBlock", () => {
     const previous = `body before
 
 <!-- stack:links:start -->
-### [Stack](https://github.com/kitlangton/stack)
+### Stack
 
 1. #1
 2. #2

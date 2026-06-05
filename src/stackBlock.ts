@@ -2,7 +2,7 @@ import { PullMeta, PullRef } from "./domain/model.ts";
 
 const start = "<!-- stack:links:start -->";
 const end = "<!-- stack:links:end -->";
-const heading = "### [Stack](https://github.com/kitlangton/stack)";
+const heading = "### Stack";
 
 const inlineTitle = (value: string | null) => {
   const title = value?.replace(/\s+/g, " ").trim();

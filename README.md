@@ -99,6 +99,15 @@ git config stack.codeHost github  # or: gitlab
 
 Use `STACK_CODE_HOST=github|gitlab` for a one-off override.
 
+## Trunk Branches
+
+By default, `stack` treats `dev`, `main`, and `master` as trunk branches. Repos
+that use another trunk, such as `develop`, can configure the trunk list:
+
+```bash
+git config stack.trunks dev,develop,main,master
+```
+
 ## Example Output
 
 ```text

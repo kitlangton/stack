@@ -19,6 +19,8 @@ Install and authenticate the matching CLI before running `stack`. The
 `github.com` and `gitlab.com` hosts are detected automatically from `origin`.
 For an enterprise host, run `git config stack.codeHost github` or `git config
 stack.codeHost gitlab`; `STACK_CODE_HOST` is available as a temporary override.
+Repos that use a trunk outside the default `dev`, `main`, and `master` set can
+configure trunks with `git config stack.trunks dev,develop,main,master`.
 
 Keep ordinary editing and commits on plain `git`. Use `stack` only for stack
 intent, stack inspection, sync, merge, and undo workflows.
@@ -229,7 +231,7 @@ stack blocks.
 - `stack merge` is dry-run by default.
 - Mutating commands need `--apply`, except `stack merge --auto` waits for the code
   host and repairs descendants after the root lands.
-- Never mutate trunk branches such as `dev`, `main`, or `master`.
+- Never mutate configured trunk branches such as `dev`, `main`, or `master`.
 - Before rebasing a branch, the tool creates a local backup branch.
 - If output is unclear, inspect with `stack status`, `stack history`, or command
   help before applying.

@@ -4,9 +4,15 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import { branchName, type BranchName } from "../domain/model.ts";
 
-export type Trunk = "dev" | "main" | "master";
+export type Trunk = "dev" | "develop" | "main" | "master";
 
-export const trunks: ReadonlyArray<Trunk> = ["dev", "main", "master"];
+export const trunks: ReadonlyArray<Exclude<Trunk, "develop">> = ["dev", "main", "master"];
+
+export const parseTrunksConfig = (value: string): ReadonlyArray<string> =>
+  value
+    .split(/[\s,]+/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 
 export interface StackConfigService {
   readonly root: string;

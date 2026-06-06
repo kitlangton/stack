@@ -23,7 +23,7 @@ import * as Proc from "../src/platform/proc.ts";
 import { RepairExecution } from "../src/repairExecution.ts";
 import * as StackBlock from "../src/stackBlock.ts";
 import * as StackGraph from "../src/stackGraph.ts";
-import { StackConfig } from "../src/services/Config.ts";
+import { parseTrunksConfig, StackConfig, trunks } from "../src/services/Config.ts";
 import { CodeHost } from "../src/services/CodeHost.ts";
 import { CodeHostGitHub } from "../src/services/code-host/GitHub.ts";
 import { CodeHostGitLab } from "../src/services/code-host/GitLab.ts";
@@ -1104,6 +1104,21 @@ const makeSyncNovel = () => {
     ),
   };
 };
+
+describe("StackConfig", () => {
+  it("does not include develop in default trunks", () => {
+    expect(trunks).toEqual(["dev", "main", "master"]);
+  });
+
+  it("parses configured trunks", () => {
+    expect(parseTrunksConfig("dev,develop main\nmaster")).toEqual([
+      "dev",
+      "develop",
+      "main",
+      "master",
+    ]);
+  });
+});
 
 describe("StackGraph", () => {
   it("builds status nodes from explicit and inferred parents", () => {

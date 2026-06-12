@@ -113,7 +113,9 @@ const parseJsonArray = (out: string): ReadonlyArray<unknown> => {
 const decodePRList = (args: ReadonlyArray<string>, out: string, urlBase: string) =>
   Effect.try({
     try: () =>
-      parseJsonArray(out).map((row) => normalizeListRow(Schema.decodeUnknownSync(PRListRow)(row), urlBase)),
+      parseJsonArray(out).map((row) =>
+        normalizeListRow(Schema.decodeUnknownSync(PRListRow)(row), urlBase),
+      ),
     catch: (err) => new CodeHostDecodeError("az", args, out, String(err)),
   });
 
@@ -217,6 +219,82 @@ export const retargetArgs = (
   "--body",
   JSON.stringify({ targetRefName: targetRefName(base) }),
 ];
+
+/** Add a label to a PR — `az repos pr create` has no label flag; use REST POST. */
+export const labelArgs = (
+  ado: { readonly organizationUrl: string; readonly project: string; readonly repository: string },
+  prId: number,
+  label: string,
+): ReadonlyArray<string> => [
+  "rest",
+  "--method",
+  "post",
+  "--uri",
+  `${ado.organizationUrl}/${encodeURIComponent(ado.project)}/_apis/git/repositories/${encodeURIComponent(ado.repository)}/pullrequests/${prId}/labels?api-version=7.1`,
+  "--resource",
+  ado.organizationUrl,
+  "--body",
+  JSON.stringify({ name: label }),
+];
+
+const describeAzFailure = (err: unknown) => {
+  if (err instanceof ExecError) {
+    const detail = `${err.stderr}\n${err.message}`;
+    return detail.trim() || err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+};
+
+/** Read-only Azure DevOps prerequisite checks for `stack doctor`. */
+export const doctorChecks = (
+  proc: Proc.Interface,
+  root: string,
+  ado: { readonly organizationUrl: string; readonly project: string; readonly repository: string },
+): Effect.Effect<ReadonlyArray<string>, never> =>
+  Effect.gen(function* () {
+    const version = yield* proc.exec(root, "az", ["version"], [0]).pipe(
+      Effect.match({
+        onFailure: () => "fail Azure CLI: az not found or not on PATH (install Azure CLI)",
+        onSuccess: () => "ok Azure CLI: az available",
+      }),
+    );
+    const extension = yield* proc
+      .exec(root, "az", ["extension", "show", "--name", "azure-devops"], [0])
+      .pipe(
+        Effect.match({
+          onFailure: (err) => {
+            const detail = describeAzFailure(err);
+            if (/not found|is not installed|No extension/i.test(detail)) {
+              return "fail azure-devops extension: not installed (run: az extension add --name azure-devops)";
+            }
+            return `fail azure-devops extension: ${detail}`;
+          },
+          onSuccess: () => "ok azure-devops extension: installed",
+        }),
+      );
+    const listArgs = repoScope(ado, [
+      "list",
+      "--status",
+      "active",
+      "--top",
+      "1",
+      "--output",
+      "json",
+    ]);
+    const prAccess = yield* proc.exec(root, "az", listArgs, [0]).pipe(
+      Effect.match({
+        onFailure: (err) => {
+          const detail = describeAzFailure(err);
+          if (/login|unauthorized|authentication|401|AAD|not logged in/i.test(detail)) {
+            return "fail Azure DevOps auth: run az login and set AZURE_DEVOPS_EXT_PAT when needed";
+          }
+          return `fail Azure DevOps pull requests: ${detail}`;
+        },
+        onSuccess: () => "ok Azure DevOps pull requests: accessible",
+      }),
+    );
+    return [version, extension, prAccess];
+  });
 
 export const layer = Layer.effect(
   CodeHost.Service,
@@ -367,7 +445,7 @@ export const layer = Layer.effect(
       base: string,
       title: string,
       body: string,
-      _labels: ReadonlyArray<string>,
+      labels: ReadonlyArray<string>,
       _headRepository?: string | null,
     ) {
       const args = repoScope(ado, [
@@ -387,6 +465,9 @@ export const layer = Layer.effect(
       ]);
       const out = yield* run(args);
       const row = yield* decodePRCreated(args, out);
+      for (const label of labels) {
+        yield* run(labelArgs(ado, row.pullRequestId, label)).pipe(Effect.catch(() => Effect.void));
+      }
       return pullRef({
         number: row.pullRequestId,
         title: row.title,

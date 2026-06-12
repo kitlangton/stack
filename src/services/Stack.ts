@@ -33,9 +33,11 @@ import * as RepairPlan from "../repairPlan.ts";
 import * as StackGraph from "../stackGraph.ts";
 import * as StackBlock from "../stackBlock.ts";
 import * as StackResult from "../stackResult.ts";
+import * as Proc from "../platform/proc.ts";
 import { StackConfig } from "./Config.ts";
 import { Git } from "./Git.ts";
 import { CodeHost } from "./CodeHost.ts";
+import * as CodeHostAzureDevOps from "./code-host/AzureDevOps.ts";
 import * as Progress from "./Progress.ts";
 import { Store } from "./Store.ts";
 
@@ -1344,7 +1346,8 @@ ${note}`;
                       branch: String(pull.head),
                       previous: meta.body,
                       reference,
-                      showTitles: codeHost.provider === "gitlab",
+                      showTitles:
+                        codeHost.provider === "gitlab" || codeHost.provider === "azuredevops",
                       completedTitles,
                     }),
                   );
@@ -1452,8 +1455,31 @@ ${note}`;
                 undo ? `info undo journal: ${undo.at}` : "ok undo journal: none",
             }),
           );
+          const adoChecks =
+            codeHost.provider === "azuredevops"
+              ? yield* Effect.gen(function* () {
+                  const maybeProc = yield* Effect.serviceOption(Proc.Service);
+                  if (Option.isNone(maybeProc)) return [] as ReadonlyArray<string>;
+                  const origin = yield* git.remote().pipe(
+                    Effect.match({
+                      onFailure: () => Option.none<string>(),
+                      onSuccess: (remote) => remote,
+                    }),
+                  );
+                  if (Option.isNone(origin)) {
+                    return ["warn Azure DevOps: no origin remote configured"];
+                  }
+                  const ado = CodeHost.adoRemoteInfo(origin.value);
+                  if (!ado) {
+                    return [
+                      "fail Azure DevOps: unable to parse organization, project, and repository from origin",
+                    ];
+                  }
+                  return yield* CodeHostAzureDevOps.doctorChecks(maybeProc.value, cfg.root, ado);
+                })
+              : [];
 
-          return [current, clean, ...trunks, pulls, state, undo];
+          return [current, clean, ...trunks, ...adoChecks, pulls, state, undo];
         }),
       );
 

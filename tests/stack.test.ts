@@ -1819,6 +1819,12 @@ describe("GitLab", () => {
 
 const adoOrigin = "https://dev.azure.com/myorg/myproject/_git/myrepo.git";
 const adoUrlBase = "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest";
+const adoHost = {
+  provider: "azuredevops" as const,
+  capabilities: { adminMerge: false },
+  requestLabel: "PR" as const,
+  reference: (number: number) => `!${number}`,
+};
 
 const adoProc = (
   handler: (
@@ -2013,7 +2019,7 @@ describe("AzureDevOps", () => {
     }).pipe(Effect.provide(adoLayer(failingProc)));
   });
 
-  it.effect("creates pull requests without fork or label arguments", () => {
+  it.effect("creates pull requests and applies labels through az rest", () => {
     const { calls, proc } = adoProc((tool) => {
       if (tool === "git") return adoOrigin;
       return JSON.stringify({
@@ -2033,7 +2039,7 @@ describe("AzureDevOps", () => {
         "main",
         "restacked",
         "body",
-        ["ignored"],
+        ["bug", "stack"],
         "contributor/project",
       );
 
@@ -2042,9 +2048,215 @@ describe("AzureDevOps", () => {
       expect(created.headRepository).toBeNull();
       const createCall = calls.find((call) => call[0] === "az" && call[3] === "create");
       expect(createCall).toBeDefined();
-      expect(createCall).not.toContain("ignored");
+      expect(createCall).not.toContain("bug");
       expect(createCall).not.toContain("contributor/project");
+      expect(
+        calls.filter(
+          (call) =>
+            call[0] === "az" &&
+            call[1] === "rest" &&
+            call[2] === "--method" &&
+            call[3] === "post" &&
+            call[5]?.includes("/labels?api-version=7.1"),
+        ),
+      ).toHaveLength(2);
+      const labelBodies = calls
+        .filter((call) => call[0] === "az" && call[1] === "rest")
+        .map((call) => call[call.indexOf("--body") + 1]);
+      expect(labelBodies).toContain('{"name":"bug"}');
+      expect(labelBodies).toContain('{"name":"stack"}');
     }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("skips label REST failures without failing create", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) => {
+          calls.push([tool, ...args]);
+          if (tool === "git") return Effect.succeed(adoOrigin);
+          if (tool === "az" && args[0] === "rest") {
+            return Effect.fail(new ExecError("az", args, 404, "label API unavailable"));
+          }
+          return Effect.succeed(
+            JSON.stringify({
+              pullRequestId: 7,
+              title: "restacked",
+              sourceRefName: "refs/heads/feature/x",
+              targetRefName: "refs/heads/main",
+              url: `${adoUrlBase}/7`,
+              isDraft: false,
+            }),
+          );
+        },
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      const created = yield* ado.create("feature/x", "main", "restacked", "body", ["bug"]);
+      expect(Number(created.number)).toBe(7);
+      expect(calls.some((call) => call[0] === "az" && call[3] === "create")).toBe(true);
+      expect(calls.some((call) => call[0] === "az" && call[1] === "rest")).toBe(true);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it("labelArgs builds az rest POST argv", () => {
+    const ado = {
+      organizationUrl: "https://dev.azure.com/myorg",
+      project: "myproject",
+      repository: "myrepo",
+    };
+    expect(CodeHostAzureDevOps.labelArgs(ado, 7, "bug")).toEqual([
+      "rest",
+      "--method",
+      "post",
+      "--uri",
+      "https://dev.azure.com/myorg/myproject/_apis/git/repositories/myrepo/pullrequests/7/labels?api-version=7.1",
+      "--resource",
+      "https://dev.azure.com/myorg",
+      "--body",
+      '{"name":"bug"}',
+    ]);
+  });
+
+  it.effect("body update persists through az repos pr update", () => {
+    let description = "initial body";
+    const { calls, proc } = adoProc((tool, args) => {
+      if (tool === "git") return adoOrigin;
+      if (tool === "az" && args.includes("update") && args.includes("--description")) {
+        description = args[args.indexOf("--description") + 1] ?? description;
+        return "";
+      }
+      return JSON.stringify({
+        pullRequestId: 7,
+        title: "feature PR",
+        description,
+        sourceRefName: "refs/heads/feature/x",
+        targetRefName: "refs/heads/dev",
+        url: `${adoUrlBase}/7`,
+        isDraft: false,
+        status: "active",
+        labels: [],
+      });
+    });
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      yield* ado.body(7, "updated body");
+      const change = yield* ado.change(7);
+      expect(change.body).toBe("updated body");
+      expect(
+        calls.some((call) => call.includes("--description") && call.includes("updated body")),
+      ).toBe(true);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("changes lists only active pull requests", () => {
+    const { calls, proc } = adoProc((tool, args) => {
+      if (tool === "git") return adoOrigin;
+      expect(args).toContain("--status");
+      expect(args).toContain("active");
+      return JSON.stringify([
+        {
+          pullRequestId: 1,
+          title: "active-pr",
+          sourceRefName: "refs/heads/a",
+          targetRefName: "refs/heads/main",
+          isDraft: false,
+        },
+      ]);
+    });
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      const pulls = yield* ado.changes();
+      expect(pulls).toHaveLength(1);
+      expect(Number(pulls[0]?.number)).toBe(1);
+      expect(calls.filter((call) => call[0] === "az" && call[3] === "list")).toHaveLength(1);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("doctorChecks reports healthy Azure DevOps prerequisites", () => {
+    const { calls, proc } = adoProc((tool) => {
+      if (tool === "git") return adoOrigin;
+      return tool === "az" ? "{}" : "";
+    });
+    const ado = {
+      organizationUrl: "https://dev.azure.com/myorg",
+      project: "myproject",
+      repository: "myrepo",
+    };
+
+    return Effect.gen(function* () {
+      const service = yield* Proc.Service;
+      const lines = yield* CodeHostAzureDevOps.doctorChecks(service, "/tmp/stack", ado);
+      expect(lines).toEqual([
+        "ok Azure CLI: az available",
+        "ok azure-devops extension: installed",
+        "ok Azure DevOps pull requests: accessible",
+      ]);
+      expect(calls.some((call) => call[0] === "az" && call[1] === "version")).toBe(true);
+      expect(calls.some((call) => call.includes("azure-devops"))).toBe(true);
+      expect(calls.some((call) => call[0] === "az" && call[3] === "list")).toBe(true);
+    }).pipe(Effect.provide(proc));
+  });
+
+  it.effect("doctorChecks reports missing azure-devops extension", () => {
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) => {
+          if (tool === "az" && args[0] === "version") return Effect.succeed("{}");
+          if (tool === "az" && args[0] === "extension") {
+            return Effect.fail(
+              new ExecError("az", args, 1, "Extension 'azure-devops' is not installed"),
+            );
+          }
+          return Effect.succeed("[]");
+        },
+      }),
+    );
+    const ado = {
+      organizationUrl: "https://dev.azure.com/myorg",
+      project: "myproject",
+      repository: "myrepo",
+    };
+
+    return Effect.gen(function* () {
+      const service = yield* Proc.Service;
+      const lines = yield* CodeHostAzureDevOps.doctorChecks(service, "/tmp/stack", ado);
+      expect(lines[1]).toContain("fail azure-devops extension");
+      expect(lines[1]).toContain("az extension add --name azure-devops");
+    }).pipe(Effect.provide(proc));
+  });
+
+  it.effect("doctorChecks reports Azure DevOps auth failures", () => {
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) => {
+          if (tool === "az" && args[0] === "version") return Effect.succeed("{}");
+          if (tool === "az" && args[0] === "extension") return Effect.succeed("{}");
+          return Effect.fail(
+            new ExecError("az", args, 1, "Please run 'az login' to setup account."),
+          );
+        },
+      }),
+    );
+    const ado = {
+      organizationUrl: "https://dev.azure.com/myorg",
+      project: "myproject",
+      repository: "myrepo",
+    };
+
+    return Effect.gen(function* () {
+      const service = yield* Proc.Service;
+      const lines = yield* CodeHostAzureDevOps.doctorChecks(service, "/tmp/stack", ado);
+      expect(lines[2]).toContain("fail Azure DevOps auth");
+      expect(lines[2]).toContain("az login");
+    }).pipe(Effect.provide(proc));
   });
 
   it.effect("retargets pull requests through az rest", () => {
@@ -2771,6 +2983,49 @@ describe("Stack", () => {
     }).pipe(Effect.provide(make())),
   );
 
+  it.effect("doctor includes Azure DevOps prerequisite checks without mutating", () => {
+    const seen: Array<string> = [];
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) =>
+          Effect.sync(() => {
+            seen.push(`${tool} ${args.join(" ")}`);
+            if (tool === "git" && args[0] === "remote") return adoOrigin;
+            return "{}";
+          }),
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const items = yield* stack.doctor();
+
+      expect(items).toContain("ok Azure CLI: az available");
+      expect(items).toContain("ok azure-devops extension: installed");
+      expect(items).toContain("ok Azure DevOps pull requests: accessible");
+      expect(seen.some((call) => call.startsWith("az version"))).toBe(true);
+      expect(seen.some((call) => call.includes("azure-devops"))).toBe(true);
+      expect(seen.filter((call) => call.startsWith("git push"))).toHaveLength(0);
+    }).pipe(
+      Effect.provide(
+        Stack.layer.pipe(
+          Layer.provideMerge(Progress.noop),
+          Layer.provideMerge(cfg),
+          Layer.provideMerge(Store.memory()),
+          Layer.provideMerge(proc),
+          Layer.provideMerge(
+            gitAndCodeHost({
+              ...adoHost,
+              remote: () => Effect.succeed(Option.some(adoOrigin)),
+              changes: () => Effect.succeed([]),
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
   it.effect("doctor hints rebuild when az fails without stderr on Windows", () =>
     Effect.gen(function* () {
       const stack = yield* Stack;
@@ -3149,6 +3404,21 @@ describe("Stack", () => {
       requestLabel: "MR",
       reference: (number) => `!${number}`,
     });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.links(true);
+
+      const body = test.bodies.get(3) ?? "";
+      expect(body).toContain("1. !4 - stack-a");
+      expect(body).toContain("2. !5 - fix+refactor(vcs): old title");
+      expect(body).toContain("3. **!3 - stack-c** 👈 current");
+      expect(body).not.toContain("#3");
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("links use scannable Azure DevOps PR references with titles", () => {
+    const test = makeSync(adoHost);
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -3798,6 +4068,45 @@ describe("Stack", () => {
 
       expect(String(error)).toContain("--admin is not supported by gitlab");
       expect(test.seen).toEqual([]);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("land rejects Azure DevOps admin merge before mutation", () => {
+    const test = makeLand([], "stack-a", null, adoHost);
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const error = yield* Effect.flip(stack.land("stack-a", { apply: true, admin: true }));
+
+      expect(String(error)).toContain("--admin is not supported by azuredevops");
+      expect(test.seen).toEqual([]);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("land auto emits progress for Azure DevOps stacks", () => {
+    const events: Array<Progress.ProgressEvent> = [];
+    const test = makeLand([], "stack-a", events, adoHost);
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.land("stack-a", { auto: true });
+
+      expect(events.map((event) => Progress.render(event))).toEqual([
+        "→ switch to dev",
+        expect.stringMatching(/^→ backup stack-a -> backup\/landed-/),
+        "→ retarget !5 (stack-b) to dev before merge",
+        "→ enable auto-merge !4 (stack-a)",
+        "… waiting for !4 to merge",
+        "→ drop local stack-a",
+        expect.stringMatching(/^→ backup stack-b -> backup\/stack-sync-/),
+        "→ rebase stack-b onto dev",
+        "→ push stack-b",
+        expect.stringMatching(/^→ backup stack-c -> backup\/stack-sync-/),
+        "→ rebase stack-c onto stack-b",
+        "→ push stack-c",
+        "→ update !5 stack block",
+        "→ update !3 stack block",
+      ]);
     }).pipe(Effect.provide(test.layer));
   });
 
@@ -4485,9 +4794,9 @@ describe("CodeHost", () => {
     expect(
       CodeHost.detectProvider("https://tfs.internal/DefaultCollection/project/_git/repo.git"),
     ).toBeNull();
-    expect(
-      CodeHost.detectProvider("https://github.com/org/dev.azure.com-migration/repo.git"),
-    ).toBe("github");
+    expect(CodeHost.detectProvider("https://github.com/org/dev.azure.com-migration/repo.git")).toBe(
+      "github",
+    );
   });
 
   it("parses Azure DevOps remotes for repository identity and URLs", () => {

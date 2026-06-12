@@ -11,6 +11,7 @@ import {
   branchName,
   branchRef,
   DirtyWorktreeError,
+  ExecError,
   MergeBaseError,
   PullMeta,
   pullRef,
@@ -1389,7 +1390,20 @@ ${note}`;
 
       const doctor: StackService["doctor"] = Effect.fn("Stack.doctor")(() =>
         Effect.gen(function* () {
-          const describe = (err: unknown) => (err instanceof Error ? err.message : String(err));
+          const describe = (err: unknown) => {
+            if (err instanceof ExecError) {
+              const stderr = err.stderr.trim();
+              if (!stderr) {
+                if (err.tool === "az" && process.platform === "win32") {
+                  return `${err.message}\n  (no stderr — rebuild and relink global stack: bun run build && npm link)`;
+                }
+                return err.message;
+              }
+              const snippet = stderr.length > 240 ? `${stderr.slice(0, 240)}…` : stderr;
+              return `${err.message}\n  ${snippet}`;
+            }
+            return err instanceof Error ? err.message : String(err);
+          };
           const current = yield* git.current().pipe(
             Effect.match({
               onFailure: (err) => `fail current branch: ${describe(err)}`,

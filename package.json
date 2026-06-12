@@ -1,8 +1,9 @@
 {
   "name": "@kitlangton/stack",
   "version": "0.2.0",
-  "description": "Squash-safe stacked PR/MR repair CLI for GitHub and GitLab",
+  "description": "Squash-safe stacked PR/MR repair CLI for GitHub, GitLab, and Azure DevOps",
   "keywords": [
+    "azure-devops",
     "cli",
     "git",
     "github",

@@ -9,8 +9,8 @@ dev
 ╰───────────╯
 ```
 
-Squash-safe stacked PR/MR repair for coding agents working in GitHub or GitLab
-repos that squash-merge and delete branches.
+Squash-safe stacked PR/MR repair for coding agents working in GitHub, GitLab, or
+Azure DevOps repos that squash-merge and delete branches.
 
 `stack` is agent-first. Humans can run it directly, but the happy path is: let
 the agent do normal code work with plain `git`, then use `stack` for stack
@@ -33,6 +33,8 @@ Install and authenticate the matching host CLI:
 ```bash
 gh auth login      # GitHub
 glab auth login    # GitLab
+az login           # Azure DevOps
+az extension add --name azure-devops
 ```
 
 ## Agent Happy Path
@@ -73,8 +75,9 @@ then repair descendants automatically after the root lands.
 - Refreshes stack blocks in descriptions.
 - Saves `.git/stack/undo.json` before mutations.
 
-GitHub stack blocks use compact `#101` references. GitLab blocks use `!101`
-references plus titles because bare GitLab MR links only show titles on hover.
+GitHub stack blocks use compact `#101` references. GitLab and Azure DevOps blocks
+use `!101` references (`#` links to work items in ADO descriptions). GitLab also
+includes titles because bare MR links only show titles on hover.
 
 If a repair fails, run:
 
@@ -84,20 +87,23 @@ stack undo
 stack undo --apply
 ```
 
-## GitHub And GitLab
+## GitHub, GitLab, And Azure DevOps
 
 Provider selection is automatic for public hosts:
 
 - `github.com` uses `gh`.
 - `gitlab.com` uses `glab`.
+- `dev.azure.com`, `ssh.dev.azure.com`, and legacy `{org}.visualstudio.com` use `az repos pr`.
 
-For enterprise hosts, configure the repo once:
+For enterprise or on-prem hosts, configure the repo once:
 
 ```bash
-git config stack.codeHost github  # or: gitlab
+git config stack.codeHost github      # or: gitlab, azuredevops
 ```
 
-Use `STACK_CODE_HOST=github|gitlab` for a one-off override.
+Use `STACK_CODE_HOST=github|gitlab|azuredevops` for a one-off override. Azure DevOps
+Server and other custom hosts are not auto-detected; set `stack.codeHost` to
+`azuredevops` and authenticate with `az login` plus `AZURE_DEVOPS_EXT_PAT` when needed.
 
 ## Example Output
 

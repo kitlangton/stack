@@ -15,6 +15,7 @@ import { renderStatus } from "./format.ts";
 import * as Proc from "./platform/proc.ts";
 import { StackConfig, trunks } from "./services/Config.ts";
 import { CodeHost } from "./services/CodeHost.ts";
+import { CodeHostAzureDevOps } from "./services/code-host/AzureDevOps.ts";
 import { CodeHostGitHub } from "./services/code-host/GitHub.ts";
 import { CodeHostGitLab } from "./services/code-host/GitLab.ts";
 import { Git } from "./services/Git.ts";
@@ -69,9 +70,10 @@ Use stack status to verify the relevant tracked stack. It hides backup branches,
 focuses on the current stack instead of listing every local branch, and
 includes open change details when the code host CLI (gh or glab) is available.
 
-Code host selection: github.com and gitlab.com are detected automatically. For
-enterprise hosts, run git config stack.codeHost github|gitlab. The temporary
-STACK_CODE_HOST=github|gitlab environment override takes precedence.`;
+Code host selection: github.com, gitlab.com, and dev.azure.com are detected
+automatically. For enterprise hosts, run git config stack.codeHost
+github|gitlab|azuredevops. The temporary STACK_CODE_HOST=github|gitlab|azuredevops
+environment override takes precedence.`;
 
 const statusCommand = Command.make(
   "status",
@@ -358,7 +360,9 @@ const live = (() => {
       const explicit = CodeHost.providerFrom(explicitValue);
       if (explicitValue && !explicit) {
         return yield* Effect.fail(
-          new Error(`invalid code host '${explicitValue}'; expected github or gitlab`),
+          new Error(
+            `invalid code host '${explicitValue}'; expected github, gitlab, or azuredevops`,
+          ),
         );
       }
       const detected = remoteOut ? CodeHost.detectProvider(remoteOut) : null;
@@ -366,11 +370,15 @@ const live = (() => {
       if (!provider) {
         return yield* Effect.fail(
           new Error(
-            "unable to determine the code host; configure it with: git config stack.codeHost github|gitlab",
+            "unable to determine the code host; configure it with: git config stack.codeHost github|gitlab|azuredevops",
           ),
         );
       }
-      return provider === "gitlab" ? CodeHostGitLab.layer : CodeHostGitHub.layer;
+      return provider === "gitlab"
+        ? CodeHostGitLab.layer
+        : provider === "azuredevops"
+          ? CodeHostAzureDevOps.layer
+          : CodeHostGitHub.layer;
     }),
   ).pipe(Layer.provide(cfg));
   const store = Store.live.pipe(Layer.provideMerge(cfg));

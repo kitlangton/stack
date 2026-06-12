@@ -54,7 +54,7 @@ const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
   ),
 );
 
-const guide = `Happy path for stacked changes (GitHub PRs / GitLab MRs)
+const guide = `Happy path for stacked changes (GitHub PRs / GitLab MRs / Azure DevOps pull requests)
 
 1. Open the changes with the right target branches.
    - Root change: target is trunk, for example dev or main.
@@ -68,7 +68,7 @@ const guide = `Happy path for stacked changes (GitHub PRs / GitLab MRs)
 
 Use stack status to verify the relevant tracked stack. It hides backup branches,
 focuses on the current stack instead of listing every local branch, and
-includes open change details when the code host CLI (gh or glab) is available.
+includes open change details when the code host CLI (gh, glab, or az repos pr) is available.
 
 Code host selection: github.com, gitlab.com, and dev.azure.com are detected
 automatically. For enterprise hosts, run git config stack.codeHost
@@ -153,7 +153,7 @@ const syncCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Infer stack links from code-host target branches (GitHub PRs / GitLab MRs), clean stale metadata, repair branches, retarget changes, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. By default this is a dry run. Add --apply to mutate branches, changes, and stack metadata.",
+    "Infer stack links from code-host target branches (GitHub PRs / GitLab MRs / Azure DevOps pull requests), clean stale metadata, repair branches, retarget changes, and refresh stack links. If branch is omitted and the current branch is on a stack, sync only that stack; otherwise sync the repo. By default this is a dry run. Add --apply to mutate branches, changes, and stack metadata.",
   ),
   Command.withExamples([
     {
@@ -185,7 +185,7 @@ const doctorCommand = Command.make(
   }),
 ).pipe(
   Command.withDescription(
-    "Check local Git, code host (GitHub or GitLab), stack metadata, trunk branches, and undo journal health without changing anything.",
+    "Check local Git, code host (GitHub, GitLab, or Azure DevOps), stack metadata, trunk branches, and undo journal health without changing anything.",
   ),
 );
 

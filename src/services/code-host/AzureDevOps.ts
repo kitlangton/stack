@@ -135,7 +135,15 @@ const decodePRCreated = (args: ReadonlyArray<string>, out: string) =>
     catch: (err) => new CodeHostDecodeError("az", args, out, String(err)),
   });
 
-const missingPull = (err: ExecError) => /not found|does not exist|404/i.test(err.stderr);
+const isShowCommand = (args: ReadonlyArray<string>) =>
+  args[0] === "repos" && args[1] === "pr" && args[2] === "show";
+
+const missingPull = (err: ExecError) => {
+  const detail = `${err.stderr}\n${err.message}`;
+  if (/not found|does not exist|404|TF401180/i.test(detail)) return true;
+  // Windows az can surface missing PRs with empty stderr.
+  return isShowCommand(err.args) && err.code !== 0 && !err.stderr.trim();
+};
 
 const listRef = (row: PRData) =>
   pullRef({
@@ -263,14 +271,7 @@ export const layer = Layer.effect(
           "--skip",
           `${skip}`,
         ]);
-        const rows = yield* runListPage(args).pipe(
-          Effect.catchTags({
-            ExecError: (err) =>
-              skip === 0 ? Effect.fail(err) : Effect.succeed([] as ReadonlyArray<PRData>),
-            CodeHostDecodeError: (err) =>
-              skip === 0 ? Effect.fail(err) : Effect.succeed([] as ReadonlyArray<PRData>),
-          }),
-        );
+        const rows = yield* runListPage(args);
         if (rows.length === 0) break;
         collected.push(...rows.map(listRef));
         if (rows.length < 100) break;

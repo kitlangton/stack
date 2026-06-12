@@ -135,12 +135,14 @@ export const adoChangeUrlBase = (remote: string): string | null => {
     : null;
 };
 
+const isPublicAdoRemote = (remote: string): boolean => {
+  if (/^https?:\/\/(?:[^@/]+@)?dev\.azure\.com\//i.test(remote)) return true;
+  if (/^[^@\s]+@ssh\.dev\.azure\.com:/i.test(remote)) return true;
+  return remote.toLowerCase().includes(".visualstudio.com") && /^https?:\/\//i.test(remote);
+};
+
 export const detectProvider = (remote: string): Provider | null => {
-  const lower = remote.toLowerCase();
-  if (lower.includes("dev.azure.com") || lower.includes("ssh.dev.azure.com")) {
-    return "azuredevops";
-  }
-  if (lower.includes(".visualstudio.com") && adoRemoteInfo(remote) !== null) {
+  if (isPublicAdoRemote(remote) && adoRemoteInfo(remote) !== null) {
     return "azuredevops";
   }
   const host = remoteInfo(remote)?.host.replace(/:\d+$/, "").toLowerCase();

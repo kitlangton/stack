@@ -1963,6 +1963,56 @@ describe("AzureDevOps", () => {
     }).pipe(Effect.provide(adoLayer(proc)));
   });
 
+  it.effect("normalizes missing Azure DevOps pull requests when az returns empty stderr", () => {
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) => {
+          if (tool === "git") return Effect.succeed(adoOrigin);
+          return Effect.fail(new ExecError(tool, args, 3, ""));
+        },
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      expect((yield* Effect.flip(ado.change(7)))._tag).toBe("CodeHostChangeNotFoundError");
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("propagates paginated Azure DevOps list failures instead of truncating", () => {
+    const failingProc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) => {
+          if (tool === "git") return Effect.succeed(adoOrigin);
+          const skip = args.indexOf("--skip");
+          const offset = skip === -1 ? 0 : Number(args[skip + 1]);
+          if (offset === 0) {
+            return Effect.succeed(
+              JSON.stringify(
+                Array.from({ length: 100 }, (_, index) => ({
+                  pullRequestId: index + 1,
+                  title: `pr-${index + 1}`,
+                  sourceRefName: `refs/heads/branch-${index + 1}`,
+                  targetRefName: "refs/heads/main",
+                  isDraft: false,
+                })),
+              ),
+            );
+          }
+          return Effect.fail(new ExecError("az", args, 1, "list page failed"));
+        },
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      const error = yield* Effect.flip(ado.changes());
+      expect(error._tag).toBe("ExecError");
+    }).pipe(Effect.provide(adoLayer(failingProc)));
+  });
+
   it.effect("creates pull requests without fork or label arguments", () => {
     const { calls, proc } = adoProc((tool) => {
       if (tool === "git") return adoOrigin;
@@ -4435,6 +4485,9 @@ describe("CodeHost", () => {
     expect(
       CodeHost.detectProvider("https://tfs.internal/DefaultCollection/project/_git/repo.git"),
     ).toBeNull();
+    expect(
+      CodeHost.detectProvider("https://github.com/org/dev.azure.com-migration/repo.git"),
+    ).toBe("github");
   });
 
   it("parses Azure DevOps remotes for repository identity and URLs", () => {

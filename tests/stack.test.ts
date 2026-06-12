@@ -1817,6 +1817,282 @@ describe("GitLab", () => {
   });
 });
 
+const adoOrigin = "https://dev.azure.com/myorg/myproject/_git/myrepo.git";
+const adoUrlBase = "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest";
+
+const adoProc = (
+  handler: (
+    tool: string,
+    args: ReadonlyArray<string>,
+    calls: Array<ReadonlyArray<string>>,
+  ) => string,
+) => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const proc = Layer.succeed(
+    Proc.Service,
+    Proc.Service.of({
+      exec: (_cwd, tool, args) =>
+        Effect.sync(() => {
+          calls.push([tool, ...args]);
+          return handler(tool, args, calls);
+        }),
+    }),
+  );
+  return { calls, proc };
+};
+
+const adoLayer = (proc: Layer.Layer<Proc.Service>) =>
+  CodeHostAzureDevOps.layer.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc));
+
+describe("AzureDevOps", () => {
+  it.effect("wait polls with the configured interval", () => {
+    let views = 0;
+    const { calls, proc } = adoProc((tool) => {
+      if (tool === "git") return adoOrigin;
+      views += 1;
+      return JSON.stringify({ status: views === 1 ? "active" : "completed" });
+    });
+    const cfgLayer = StackConfig.layer({
+      root: "/tmp/stack",
+      trunks: ["dev"],
+      codeHostWaitIntervalMillis: 1_000,
+    }).pipe(Layer.provide(NodeServices.layer));
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      const fiber = yield* ado.wait(4).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.yieldNow;
+      expect(calls).toHaveLength(2);
+
+      yield* TestClock.adjust("999 millis");
+      expect(calls).toHaveLength(2);
+
+      yield* TestClock.adjust("1 millis");
+      yield* Fiber.join(fiber);
+      expect(calls).toHaveLength(3);
+      expect(calls.at(-1)?.slice(0, 4)).toEqual(["az", "repos", "pr", "show"]);
+    }).pipe(
+      Effect.provide(
+        CodeHostAzureDevOps.layer.pipe(Layer.provideMerge(cfgLayer), Layer.provideMerge(proc)),
+      ),
+    );
+  });
+
+  it.effect("decodes paginated Azure DevOps pull request list pages", () => {
+    const { calls, proc } = adoProc((tool, args) => {
+      if (tool === "git") return adoOrigin;
+      const skip = args.indexOf("--skip");
+      const offset = skip === -1 ? 0 : Number(args[skip + 1]);
+      if (offset === 0) {
+        return JSON.stringify(
+          Array.from({ length: 100 }, (_, index) => ({
+            pullRequestId: index + 1,
+            title: `pr-${index + 1}`,
+            sourceRefName: `refs/heads/branch-${index + 1}`,
+            targetRefName: "refs/heads/main",
+            isDraft: false,
+          })),
+        );
+      }
+      return JSON.stringify([
+        {
+          pullRequestId: 101,
+          title: "page-two",
+          sourceRefName: "refs/heads/page-two",
+          targetRefName: "refs/heads/main",
+          url: `${adoUrlBase}/101`,
+          isDraft: false,
+        },
+      ]);
+    });
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      const pulls = yield* ado.changes();
+
+      expect(pulls.map((pull) => Number(pull.number))).toEqual([
+        ...Array.from({ length: 100 }, (_, index) => index + 1),
+        101,
+      ]);
+      expect(pulls.every((pull) => pull.headRepository === null)).toBe(true);
+      expect(calls.filter((call) => call[0] === "az" && call[3] === "list")).toHaveLength(2);
+      expect(calls.find((call) => call.includes("--skip") && call.includes("100"))).toBeDefined();
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("loads a pull request through az repos pr show", () => {
+    const { proc } = adoProc((tool) => {
+      if (tool === "git") return adoOrigin;
+      return JSON.stringify({
+        pullRequestId: 7,
+        title: "feature PR",
+        description: "body",
+        sourceRefName: "refs/heads/feature/x",
+        targetRefName: "refs/heads/dev",
+        url: `${adoUrlBase}/7`,
+        isDraft: false,
+        status: "active",
+        labels: ["bug", { name: "stack" }],
+      });
+    });
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      const change = yield* ado.change(7);
+
+      expect(change.body).toBe("body");
+      expect(change.headRepository).toBeNull();
+      expect(change.labels.map((label) => label.name)).toEqual(["bug", "stack"]);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("normalizes missing Azure DevOps historical changes", () => {
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) => {
+          if (tool === "git") return Effect.succeed(adoOrigin);
+          return Effect.fail(new ExecError(tool, args, 1, "404 Not Found"));
+        },
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      expect((yield* Effect.flip(ado.change(7)))._tag).toBe("CodeHostChangeNotFoundError");
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("creates pull requests without fork or label arguments", () => {
+    const { calls, proc } = adoProc((tool) => {
+      if (tool === "git") return adoOrigin;
+      return JSON.stringify({
+        pullRequestId: 7,
+        title: "restacked",
+        sourceRefName: "refs/heads/feature/x",
+        targetRefName: "refs/heads/main",
+        url: `${adoUrlBase}/7`,
+        isDraft: false,
+      });
+    });
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      const created = yield* ado.create(
+        "feature/x",
+        "main",
+        "restacked",
+        "body",
+        ["ignored"],
+        "contributor/project",
+      );
+
+      expect(Number(created.number)).toBe(7);
+      expect(String(created.url)).toBe(`${adoUrlBase}/7`);
+      expect(created.headRepository).toBeNull();
+      const createCall = calls.find((call) => call[0] === "az" && call[3] === "create");
+      expect(createCall).toBeDefined();
+      expect(createCall).not.toContain("ignored");
+      expect(createCall).not.toContain("contributor/project");
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("retargets pull requests through az rest", () => {
+    const { calls, proc } = adoProc((tool) => (tool === "git" ? adoOrigin : ""));
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      yield* ado.edit(7, "main");
+
+      expect(calls).toEqual([
+        ["git", "remote", "get-url", "origin"],
+        [
+          "az",
+          "rest",
+          "--method",
+          "patch",
+          "--uri",
+          "https://dev.azure.com/myorg/myproject/_apis/git/repositories/myrepo/pullrequests/7?api-version=7.1",
+          "--resource",
+          "https://dev.azure.com/myorg",
+          "--body",
+          '{"targetRefName":"refs/heads/main"}',
+        ],
+      ]);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("enables Azure DevOps auto-complete through az repos pr update", () => {
+    const { calls, proc } = adoProc((tool) => (tool === "git" ? adoOrigin : ""));
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      yield* ado.auto(7);
+
+      expect(calls.at(-1)).toEqual([
+        "az",
+        "repos",
+        "pr",
+        "update",
+        "--id",
+        "7",
+        "--auto-complete",
+        "true",
+        "--squash",
+        "true",
+        "--organization",
+        "https://dev.azure.com/myorg",
+      ]);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("completes pull requests immediately without auto-complete", () => {
+    const { calls, proc } = adoProc((tool) => (tool === "git" ? adoOrigin : ""));
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      yield* ado.merge(7);
+
+      expect(calls.at(-1)).toEqual([
+        "az",
+        "repos",
+        "pr",
+        "update",
+        "--id",
+        "7",
+        "--status",
+        "completed",
+        "--squash",
+        "true",
+        "--organization",
+        "https://dev.azure.com/myorg",
+      ]);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("abandons pull requests through az repos pr update", () => {
+    const { calls, proc } = adoProc((tool) => (tool === "git" ? adoOrigin : ""));
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      yield* ado.close(7);
+
+      expect(calls.at(-1)).toEqual([
+        "az",
+        "repos",
+        "pr",
+        "update",
+        "--id",
+        "7",
+        "--status",
+        "abandoned",
+        "--organization",
+        "https://dev.azure.com/myorg",
+      ]);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+});
+
 describe("Stack", () => {
   it.effect("status shows PR titles when GitHub details are available", () =>
     Effect.gen(function* () {
@@ -2463,8 +2739,7 @@ describe("Stack", () => {
           Layer.provideMerge(
             gitAndCodeHost({
               requestLabel: "PR",
-              changes: () =>
-                Effect.fail(new ExecError("az", ["repos", "pr", "list"], 1, "")),
+              changes: () => Effect.fail(new ExecError("az", ["repos", "pr", "list"], 1, "")),
             }),
           ),
         ),
@@ -4153,9 +4428,7 @@ describe("CodeHost", () => {
       "azuredevops",
     );
     expect(
-      CodeHost.detectProvider(
-        "https://absinc.visualstudio.com/Net/_git/TheMortgageOfficeWeb",
-      ),
+      CodeHost.detectProvider("https://absinc.visualstudio.com/Net/_git/TheMortgageOfficeWeb"),
     ).toBe("azuredevops");
     expect(CodeHost.detectProvider("https://gitlab.example.com/team/repo.git")).toBeNull();
     expect(CodeHost.detectProvider("https://git.company.internal/team/repo.git")).toBeNull();
@@ -4270,7 +4543,13 @@ describe("CodeHost", () => {
       ado.repository,
     ]);
     expect(
-      CodeHostAzureDevOps.repoScope(ado, ["create", "--source-branch", "feature", "--target-branch", "main"]),
+      CodeHostAzureDevOps.repoScope(ado, [
+        "create",
+        "--source-branch",
+        "feature",
+        "--target-branch",
+        "main",
+      ]),
     ).toContain("--repository");
 
     const showArgs = CodeHostAzureDevOps.prScope(ado.organizationUrl, [

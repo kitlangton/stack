@@ -7,8 +7,11 @@
 - Add Azure DevOps support through the `azure-devops` CLI extension (`az repos pr`).
   Cloud `dev.azure.com` and `ssh.dev.azure.com` remotes auto-detect; on-prem hosts
   require `git config stack.codeHost azuredevops`. ADO pull requests map onto the
-  existing `PullRef` / `PullMeta` shapes, use `#N` references, and reject `--admin`
-  merge like GitLab.
+  existing `PullRef` / `PullMeta` shapes, use `!N` references (not `#N`, which links
+  to work items in ADO descriptions), and reject `--admin` merge like GitLab.
+  Known limitations: fork `headRepository` is not available from `az repos pr`, labels
+  passed to `create` are ignored, and Azure DevOps Server / custom hosts need an
+  explicit `stack.codeHost` setting.
 
 ## 0.2.0
 

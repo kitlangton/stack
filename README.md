@@ -105,6 +105,11 @@ Use `STACK_CODE_HOST=github|gitlab|azuredevops` for a one-off override. Azure De
 Server and other custom hosts are not auto-detected; set `stack.codeHost` to
 `azuredevops` and authenticate with `az login` plus `AZURE_DEVOPS_EXT_PAT` when needed.
 
+Azure DevOps limitations: `az repos pr` does not expose fork source repositories, so
+`headRepository` stays empty and fork-backed repair push routing is unavailable. Labels
+passed when recreating a pull request are ignored. On-prem and custom ADO hosts require
+an explicit `stack.codeHost` setting.
+
 ## Example Output
 
 ```text

@@ -106,9 +106,12 @@ Server and other custom hosts are not auto-detected; set `stack.codeHost` to
 `azuredevops` and authenticate with `az login` plus `AZURE_DEVOPS_EXT_PAT` when needed.
 
 Azure DevOps limitations: `az repos pr` does not expose fork source repositories, so
-`headRepository` stays empty and fork-backed repair push routing is unavailable. Labels
-passed when recreating a pull request are ignored. On-prem and custom ADO hosts require
-an explicit `stack.codeHost` setting.
+`headRepository` stays empty and fork-backed repair push routing is unavailable.
+`--admin` merge is not supported. On-prem and custom ADO hosts require an explicit
+`stack.codeHost` setting. Labels on recreate are applied through Azure DevOps REST
+after create when the installed `az`/`azure-devops` version supports label APIs;
+otherwise creation succeeds without labels. `stack doctor` checks `az`, the
+`azure-devops` extension, and pull-request access before sync or merge.
 
 ## Example Output
 

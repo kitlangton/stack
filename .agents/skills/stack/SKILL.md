@@ -21,7 +21,11 @@ authenticate the matching CLI before running `stack`. The `github.com`,
 legacy `{org}.visualstudio.com`) are detected automatically from
 `origin`. For an enterprise or on-prem host, run `git config stack.codeHost
 github`, `gitlab`, or `azuredevops`; `STACK_CODE_HOST` is available as a
-temporary override. `--admin` is not supported on GitLab or Azure DevOps.
+temporary override. `--admin` is not supported on GitLab or Azure DevOps. Azure
+DevOps does not expose fork `headRepository` routing through `az repos pr`.
+Label-on-create uses REST after PR creation when supported; otherwise create still
+succeeds without labels. Run `stack doctor` to verify `az`, the `azure-devops`
+extension, and auth before sync or merge.
 
 Keep ordinary editing and commits on plain `git`. Use `stack` only for stack
 intent, stack inspection, sync, merge, and undo workflows.
@@ -56,7 +60,7 @@ can restore the previous branch tips, change target branches, and stack metadata
 - `stack sync [branch]`: preview inferred target-branch stack links and repairs without changing branches or changes.
 - `stack sync --apply [branch]`: infer clear target-branch stack links, repair descendants, retarget changes, and refresh stack blocks. With a branch argument, sync only the stack containing that branch.
 - `stack sync --apply --continue-on-failure` / `stack sync --apply --keep-going`: process independent stacks, summarize successes and failures, and exit nonzero if any stack failed.
-- `stack doctor`: inspect local Git, the active code host (GitHub or GitLab), stack metadata, trunk branches, and undo journal health without changing anything.
+- `stack doctor`: inspect local Git, the active code host (GitHub, GitLab, or Azure DevOps), stack metadata, trunk branches, and undo journal health without changing anything. For Azure DevOps, doctor also checks `az`, the `azure-devops` extension, and pull-request access.
 - `stack merge [branch]`: dry-run root merge plus descendant repair.
 - `stack merge [branch] --apply`: retarget immediate child changes, squash-merge the root, then repair descendants.
 - `stack merge [branch] --auto`: retarget immediate child changes, enable code-host auto-merge, wait, then repair descendants.
@@ -194,8 +198,8 @@ Use `--auto --through <branch-or-change>` to repeat that root merge flow through
 bounded target instead of merging the whole stack by default.
 
 `--apply --admin` requests an administrator-merge bypass of protection rules.
-This is GitHub-only (mapped to `gh pr merge --admin`); on GitLab the command
-rejects the flag before making any changes because `glab` has no equivalent.
+This is GitHub-only (mapped to `gh pr merge --admin`); on GitLab and Azure DevOps the command
+rejects the flag before making any changes because those CLIs have no equivalent.
 
 Mutating merge workflows stream progress while they run. Expect live progress for
 retargeting, backup, merge/auto-merge, waiting, and cleanup before the final

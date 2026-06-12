@@ -25,6 +25,7 @@ import * as StackBlock from "../src/stackBlock.ts";
 import * as StackGraph from "../src/stackGraph.ts";
 import { StackConfig } from "../src/services/Config.ts";
 import { CodeHost } from "../src/services/CodeHost.ts";
+import { CodeHostAzureDevOps } from "../src/services/code-host/AzureDevOps.ts";
 import { CodeHostGitHub } from "../src/services/code-host/GitHub.ts";
 import { CodeHostGitLab } from "../src/services/code-host/GitLab.ts";
 import { Git } from "../src/services/Git.ts";
@@ -2444,6 +2445,33 @@ describe("Stack", () => {
     }).pipe(Effect.provide(make())),
   );
 
+  it.effect("doctor hints rebuild when az fails without stderr on Windows", () =>
+    Effect.gen(function* () {
+      const stack = yield* Stack;
+      const items = yield* stack.doctor();
+      const line = items.find((item) => item.startsWith("fail open"));
+      expect(line).toBeDefined();
+      if (process.platform === "win32") {
+        expect(line).toContain("rebuild and relink");
+      }
+    }).pipe(
+      Effect.provide(
+        Stack.layer.pipe(
+          Layer.provideMerge(Progress.noop),
+          Layer.provideMerge(cfg),
+          Layer.provideMerge(Store.memory()),
+          Layer.provideMerge(
+            gitAndCodeHost({
+              requestLabel: "PR",
+              changes: () =>
+                Effect.fail(new ExecError("az", ["repos", "pr", "list"], 1, "")),
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+
   it.effect("sync fixes a missing parent and recreates the child pr", () => {
     const test = makeSync();
 
@@ -4118,8 +4146,66 @@ describe("CodeHost", () => {
   it("only auto-detects unambiguous public providers", () => {
     expect(CodeHost.detectProvider("https://github.com/owner/repo.git")).toBe("github");
     expect(CodeHost.detectProvider("git@gitlab.com:group/repo.git")).toBe("gitlab");
+    expect(CodeHost.detectProvider("https://dev.azure.com/myorg/myproject/_git/myrepo.git")).toBe(
+      "azuredevops",
+    );
+    expect(CodeHost.detectProvider("git@ssh.dev.azure.com:v3/myorg/myproject/myrepo.git")).toBe(
+      "azuredevops",
+    );
+    expect(
+      CodeHost.detectProvider(
+        "https://absinc.visualstudio.com/Net/_git/TheMortgageOfficeWeb",
+      ),
+    ).toBe("azuredevops");
     expect(CodeHost.detectProvider("https://gitlab.example.com/team/repo.git")).toBeNull();
     expect(CodeHost.detectProvider("https://git.company.internal/team/repo.git")).toBeNull();
+    expect(
+      CodeHost.detectProvider("https://tfs.internal/DefaultCollection/project/_git/repo.git"),
+    ).toBeNull();
+  });
+
+  it("parses Azure DevOps remotes for repository identity and URLs", () => {
+    expect(CodeHost.adoRemoteInfo("https://dev.azure.com/myorg/myproject/_git/myrepo.git")).toEqual(
+      {
+        organizationUrl: "https://dev.azure.com/myorg",
+        project: "myproject",
+        repository: "myrepo",
+      },
+    );
+    expect(CodeHost.adoRemoteInfo("git@ssh.dev.azure.com:v3/myorg/myproject/myrepo.git")).toEqual({
+      organizationUrl: "https://dev.azure.com/myorg",
+      project: "myproject",
+      repository: "myrepo",
+    });
+    expect(
+      CodeHost.adoRemoteInfo("https://tfs.example.com/DefaultCollection/myproject/_git/myrepo"),
+    ).toEqual({
+      organizationUrl: "https://tfs.example.com/DefaultCollection",
+      project: "myproject",
+      repository: "myrepo",
+    });
+    expect(
+      CodeHost.adoRemoteInfo("https://myorg.visualstudio.com/myproject/_git/myrepo.git"),
+    ).toEqual({
+      organizationUrl: "https://dev.azure.com/myorg",
+      project: "myproject",
+      repository: "myrepo",
+    });
+    expect(
+      CodeHost.repositoryFor(
+        "https://dev.azure.com/myorg/myproject/_git/fork.git",
+        "https://dev.azure.com/myorg/myproject/_git/myrepo.git",
+      ),
+    ).toBe("myproject/fork");
+    expect(
+      CodeHost.repositoryFor(
+        "https://dev.azure.com/otherorg/myproject/_git/fork.git",
+        "https://dev.azure.com/myorg/myproject/_git/myrepo.git",
+      ),
+    ).toBeNull();
+    expect(CodeHost.adoChangeUrlBase("https://dev.azure.com/myorg/myproject/_git/myrepo.git")).toBe(
+      "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest",
+    );
   });
 
   it("parses repository identities for configured enterprise hosts", () => {
@@ -4159,12 +4245,176 @@ describe("CodeHost", () => {
     expect(CodeHost.providerFrom("")).toBeNull();
     expect(CodeHost.providerFrom("github")).toBe("github");
     expect(CodeHost.providerFrom("GITLAB")).toBe("gitlab");
+    expect(CodeHost.providerFrom("ado")).toBe("azuredevops");
+    expect(CodeHost.providerFrom("AZUREDEVOPS")).toBe("azuredevops");
     expect(CodeHost.providerFrom("bitbucket")).toBeNull();
+  });
+
+  it("scopes Azure DevOps az repos pr arguments per subcommand", () => {
+    const ado = {
+      organizationUrl: "https://dev.azure.com/absinc",
+      project: "Net",
+      repository: "TheMortgageOfficeWeb",
+    };
+    expect(CodeHostAzureDevOps.repoScope(ado, ["list", "--status", "active"])).toEqual([
+      "repos",
+      "pr",
+      "list",
+      "--status",
+      "active",
+      "--organization",
+      ado.organizationUrl,
+      "--project",
+      ado.project,
+      "--repository",
+      ado.repository,
+    ]);
+    expect(
+      CodeHostAzureDevOps.repoScope(ado, ["create", "--source-branch", "feature", "--target-branch", "main"]),
+    ).toContain("--repository");
+
+    const showArgs = CodeHostAzureDevOps.prScope(ado.organizationUrl, [
+      "show",
+      "--id",
+      "11542",
+      "--output",
+      "json",
+    ]);
+    expect(showArgs).toEqual([
+      "repos",
+      "pr",
+      "show",
+      "--id",
+      "11542",
+      "--output",
+      "json",
+      "--organization",
+      ado.organizationUrl,
+    ]);
+    expect(showArgs).not.toContain("--project");
+    expect(showArgs).not.toContain("--repository");
+
+    const updateArgs = CodeHostAzureDevOps.prScope(ado.organizationUrl, [
+      "update",
+      "--id",
+      "11542",
+      "--status",
+      "completed",
+    ]);
+    expect(updateArgs).not.toContain("--project");
+    expect(updateArgs).not.toContain("--repository");
+
+    expect(CodeHostAzureDevOps.retargetArgs(ado, 11542, "dev")).toEqual([
+      "rest",
+      "--method",
+      "patch",
+      "--uri",
+      `${ado.organizationUrl}/${ado.project}/_apis/git/repositories/${ado.repository}/pullrequests/11542?api-version=7.1`,
+      "--resource",
+      ado.organizationUrl,
+      "--body",
+      '{"targetRefName":"refs/heads/dev"}',
+    ]);
+    expect(CodeHostAzureDevOps.retargetArgs(ado, 1, "refs/heads/main").at(-1)).toBe(
+      '{"targetRefName":"refs/heads/main"}',
+    );
+  });
+
+  it("decodes Azure DevOps pull request list JSON", async () => {
+    const urlBase = "https://dev.azure.com/org/project/_git/repo/pullrequest";
+    const fixture = JSON.stringify([
+      {
+        pullRequestId: 42,
+        title: "Feature",
+        sourceRefName: "refs/heads/feature/x",
+        targetRefName: "refs/heads/main",
+        url: `${urlBase}/42`,
+        isDraft: false,
+      },
+    ]);
+    const rows = await Effect.runPromise(
+      CodeHostAzureDevOps.decodePullListFixture(["repos", "pr", "list"], fixture, urlBase),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.pullRequestId).toBe(42);
+    expect(rows[0]?.url).toBe(`${urlBase}/42`);
+    expect(rows[0]?.isDraft).toBe(false);
+  });
+
+  it("synthesizes Azure DevOps list URLs when az omits url and isDraft", async () => {
+    const urlBase = "https://dev.azure.com/org/project/_git/repo/pullrequest";
+    const fixture = JSON.stringify([
+      {
+        pullRequestId: 99,
+        title: "Minimal row",
+        sourceRefName: "refs/heads/feature/y",
+        targetRefName: "refs/heads/dev",
+      },
+    ]);
+    const rows = await Effect.runPromise(
+      CodeHostAzureDevOps.decodePullListFixture(["repos", "pr", "list"], fixture, urlBase),
+    );
+    expect(rows[0]?.url).toBe(`${urlBase}/99`);
+    expect(rows[0]?.isDraft).toBe(false);
+  });
+
+  it("decodes Azure DevOps pull request show JSON with null labels", async () => {
+    const urlBase = "https://dev.azure.com/absinc/Net/_git/TheMortgageOfficeWeb/pullrequest";
+    // Shape from `az repos pr show` / GitPullRequest REST object (labels often null when unset).
+    const fixture = JSON.stringify({
+      pullRequestId: 11542,
+      codeReviewId: 11542,
+      title: "Default Interest Phase 1 + Mid-Period Default For Billable Loans",
+      description: "PR body",
+      sourceRefName: "refs/heads/default-interest-mid-period",
+      targetRefName: "refs/heads/dev",
+      status: "active",
+      mergeStatus: "conflicts",
+      isDraft: true,
+      labels: null,
+      url: "https://absinc.visualstudio.com/01275bc9-fa4e-455f-96bd-02c72f098a4e/_apis/git/repositories/711f9f83-a600-40cd-a1f2-0d821e05eb0c/pullRequests/11542",
+      repository: {
+        name: "TheMortgageOfficeWeb",
+        project: { name: "Net" },
+      },
+    });
+    const row = await Effect.runPromise(
+      CodeHostAzureDevOps.decodePullViewFixture(
+        ["repos", "pr", "show", "--id", "11542"],
+        fixture,
+        urlBase,
+      ),
+    );
+    expect(row.pullRequestId).toBe(11542);
+    expect(row.isDraft).toBe(true);
+    expect(row.status).toBe("active");
+    expect(row.labels).toEqual([]);
+    expect(row.description).toBe("PR body");
+    expect(row.url).toContain("pullRequests/11542");
+  });
+
+  it("decodes Azure DevOps show JSON with WebApiTagDefinition labels", async () => {
+    const urlBase = "https://dev.azure.com/org/project/_git/repo/pullrequest";
+    const fixture = JSON.stringify({
+      pullRequestId: 7,
+      title: "Tagged",
+      sourceRefName: "refs/heads/a",
+      targetRefName: "refs/heads/main",
+      status: "active",
+      labels: [{ id: "00000000-0000-0000-0000-000000000001", name: "bug", active: true }],
+    });
+    const row = await Effect.runPromise(
+      CodeHostAzureDevOps.decodePullViewFixture(["repos", "pr", "show"], fixture, urlBase),
+    );
+    expect(row.labels).toHaveLength(1);
+    expect(row.url).toBe(`${urlBase}/7`);
+    expect(row.isDraft).toBe(false);
   });
 
   for (const adapter of [
     { provider: "github", state: "OPEN", memory: CodeHostGitHub.memory },
     { provider: "gitlab", state: "opened", memory: CodeHostGitLab.memory },
+    { provider: "azuredevops", state: "active", memory: CodeHostAzureDevOps.memory },
   ]) {
     it.effect(`${adapter.provider} memory layer satisfies the CodeHost contract`, () => {
       const log: Array<string> = [];
@@ -4275,6 +4525,25 @@ describe("CodeHost", () => {
       expect(error._tag).toBe("UnsupportedCodeHostOperation");
       expect(error.message).toContain("admin merge is not supported by gitlab");
     }).pipe(Effect.provide(CodeHostGitLab.memory())),
+  );
+
+  it.effect("azuredevops rejects admin merge rather than ignoring it", () =>
+    Effect.gen(function* () {
+      const host = yield* CodeHost.Service;
+      const error = yield* Effect.flip(host.merge(1, { admin: true }));
+      expect(error._tag).toBe("UnsupportedCodeHostOperation");
+      expect(error.message).toContain("admin merge is not supported by azuredevops");
+    }).pipe(Effect.provide(CodeHostAzureDevOps.memory())),
+  );
+
+  it.effect("azuredevops uses PR references and ADO pull request URLs", () =>
+    Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      expect(ado.reference(3)).toBe("!3");
+      expect(ado.changeUrlBase("https://dev.azure.com/myorg/myproject/_git/myrepo.git")).toBe(
+        "https://dev.azure.com/myorg/myproject/_git/myrepo/pullrequest",
+      );
+    }).pipe(Effect.provide(CodeHostAzureDevOps.memory())),
   );
 });
 

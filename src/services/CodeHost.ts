@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import type { CodeHostError, PullMeta, PullRef } from "../domain/model.ts";
 
-export type Provider = "github" | "gitlab";
+export type Provider = "github" | "gitlab" | "azuredevops";
 
 export interface Capabilities {
   readonly adminMerge: boolean;
@@ -49,6 +49,12 @@ export interface RemoteInfo {
   readonly repo: string;
 }
 
+export interface AdoRemoteInfo {
+  readonly organizationUrl: string;
+  readonly project: string;
+  readonly repository: string;
+}
+
 const trimGit = (value: string) => (value.endsWith(".git") ? value.slice(0, -4) : value);
 
 const fromHostPath = (host: string, path: string): RemoteInfo | null => {
@@ -70,7 +76,73 @@ export const remoteInfo = (remote: string): RemoteInfo | null => {
   return null;
 };
 
+const parseAdoGitPath = (path: string, organizationUrl: string): AdoRemoteInfo | null => {
+  const normalized = trimGit(path.replace(/^\/+/, "").replace(/\/+$/, ""));
+  const match = normalized.match(/^(.*)\/_git\/([^/]+)$/);
+  if (!match) return null;
+  const before = match[1]!;
+  const repository = match[2]!;
+  const segments = before.split("/").filter(Boolean);
+  if (segments.length < 1) return null;
+  const project = segments[segments.length - 1]!;
+  return { organizationUrl, project, repository };
+};
+
+export const adoRemoteInfo = (remote: string): AdoRemoteInfo | null => {
+  const devAzure = remote.match(/^https?:\/\/(?:[^@/]+@)?dev\.azure\.com\/(.+)$/i);
+  if (devAzure) {
+    const segments = devAzure[1]!.split("/").filter(Boolean);
+    const org = segments[0];
+    if (!org) return null;
+    return parseAdoGitPath(devAzure[1]!, `https://dev.azure.com/${org}`);
+  }
+
+  const legacy = remote.match(/^https?:\/\/(?:[^@/]+@)?([^.]+)\.visualstudio\.com\/(.+)$/i);
+  if (legacy) {
+    return parseAdoGitPath(legacy[2]!, `https://dev.azure.com/${legacy[1]}`);
+  }
+
+  const ssh = remote.match(/^[^@\s]+@ssh\.dev\.azure\.com:v3\/(.+?)\/?$/i);
+  if (ssh) {
+    const parts = ssh[1]!.split("/").filter(Boolean);
+    if (parts.length < 3) return null;
+    const [org, project, repository] = parts;
+    return {
+      organizationUrl: `https://dev.azure.com/${org}`,
+      project: project!,
+      repository: trimGit(repository!),
+    };
+  }
+
+  const https = remote.match(/^https?:\/\/(?:[^@/]+@)?([^/]+)\/(.+?)\/?$/);
+  if (https && !/^dev\.azure\.com$/i.test(https[1]!.replace(/:\d+$/, ""))) {
+    const host = https[1]!.replace(/:\d+$/, "");
+    const path = https[2]!;
+    if (!path.includes("_git/")) return null;
+    const segments = path.split("/").filter(Boolean);
+    const collection = segments[0];
+    if (!collection) return null;
+    return parseAdoGitPath(path, `https://${host}/${collection}`);
+  }
+
+  return null;
+};
+
+export const adoChangeUrlBase = (remote: string): string | null => {
+  const info = adoRemoteInfo(remote);
+  return info
+    ? `${info.organizationUrl}/${info.project}/_git/${info.repository}/pullrequest`
+    : null;
+};
+
 export const detectProvider = (remote: string): Provider | null => {
+  const lower = remote.toLowerCase();
+  if (lower.includes("dev.azure.com") || lower.includes("ssh.dev.azure.com")) {
+    return "azuredevops";
+  }
+  if (lower.includes(".visualstudio.com") && adoRemoteInfo(remote) !== null) {
+    return "azuredevops";
+  }
   const host = remoteInfo(remote)?.host.replace(/:\d+$/, "").toLowerCase();
   if (host === "github.com") return "github";
   if (host === "gitlab.com") return "gitlab";
@@ -81,10 +153,22 @@ export const providerFrom = (value: string | undefined): Provider | null => {
   const lower = value?.trim().toLowerCase();
   if (lower === "github") return "github";
   if (lower === "gitlab") return "gitlab";
+  if (lower === "azuredevops" || lower === "ado") return "azuredevops";
   return null;
 };
 
 export const repositoryFor = (remote: string, origin?: string): string | null => {
+  const ado = adoRemoteInfo(remote);
+  const originAdo = origin ? adoRemoteInfo(origin) : null;
+  if (ado) {
+    if (
+      originAdo &&
+      ado.organizationUrl.toLowerCase() !== originAdo.organizationUrl.toLowerCase()
+    ) {
+      return null;
+    }
+    return `${ado.project}/${ado.repository}`.toLowerCase();
+  }
   const info = remoteInfo(remote);
   const originInfo = origin ? remoteInfo(origin) : null;
   if (info && originInfo && info.host.toLowerCase() !== originInfo.host.toLowerCase()) return null;

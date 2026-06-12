@@ -2,6 +2,7 @@ export * from "./domain/model.ts";
 export * from "./format.ts";
 export * from "./services/Config.ts";
 export { CodeHost } from "./services/CodeHost.ts";
+export { CodeHostAzureDevOps } from "./services/code-host/AzureDevOps.ts";
 export { CodeHostGitHub } from "./services/code-host/GitHub.ts";
 export { CodeHostGitLab } from "./services/code-host/GitLab.ts";
 export { Git } from "./services/Git.ts";

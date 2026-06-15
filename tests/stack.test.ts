@@ -506,6 +506,45 @@ const make = (state = new StackState({ version: 1, links: [] })) =>
     Layer.provideMerge(Store.memory(state)),
   );
 
+describe("Git", () => {
+  it.effect("reads raw configured remote URLs before Git insteadOf rewrites", () =>
+    Effect.gen(function* () {
+      const root = yield* tempDir();
+      const repo = join(root, "repo");
+
+      yield* mkdirp(repo);
+      yield* shell(repo, "git", ["init", "-b", "main"]);
+      yield* shell(repo, "git", ["remote", "add", "origin", "git@github.com:example/repo.git"]);
+      yield* shell(repo, "git", [
+        "config",
+        "url.github-work:example/.insteadOf",
+        "git@github.com:example/",
+      ]);
+
+      expect(yield* shell(repo, "git", ["remote", "get-url", "origin"])).toBe(
+        "github-work:example/repo.git",
+      );
+
+      const cfgLayer = StackConfig.layer({ root: repo, trunks: ["main"] }).pipe(
+        Layer.provide(NodeServices.layer),
+      );
+      const result = yield* Effect.gen(function* () {
+        const git = yield* Git.Service;
+        const remote = yield* git.remote();
+        const remotes = yield* git.remotes();
+        return { remote, remotes };
+      }).pipe(
+        Effect.provide(Git.live.pipe(Layer.provide(cfgLayer))),
+        Effect.provide(Proc.live),
+        Effect.provide(NodeServices.layer),
+      );
+
+      expect(Option.getOrUndefined(result.remote)).toBe("git@github.com:example/repo.git");
+      expect(result.remotes).toEqual([{ name: "origin", url: "git@github.com:example/repo.git" }]);
+    }).pipe(Effect.provide(platform)),
+  );
+});
+
 const makeSync = (codeHost: Partial<CodeHost.Interface> = {}) => {
   const seen: Array<string> = [];
   const bodies = new Map<number, string>();

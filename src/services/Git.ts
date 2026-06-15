@@ -92,13 +92,13 @@ export const live = Layer.effect(
       run("git", ["fetch", "origin", "--prune"]).pipe(Effect.asVoid),
     );
     const remotes = Effect.fn("Git.remotes")(() =>
-      run("git", ["config", "--get-regexp", "^remote\\..*\\.url$"], [0, 1]).pipe(
+      run("git", ["config", "--get-regexp", "^remote\\..*\\.(push)?url$"], [0, 1]).pipe(
         Effect.map((out) => {
           const map = new Map<string, string>();
           for (const line of out.split("\n").filter(Boolean)) {
-            const match = line.match(/^remote\.(.+)\.url\s+(.+)$/);
+            const match = line.match(/^remote\.(.+)\.(push)?url\s+(.+)$/);
             if (!match) continue;
-            map.set(match[1]!, match[2]!);
+            if (match[2] === "push" || !map.has(match[1]!)) map.set(match[1]!, match[3]!);
           }
           return [...map].map(([name, url]) => ({ name, url }));
         }),

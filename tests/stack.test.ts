@@ -543,6 +543,38 @@ describe("Git", () => {
       expect(result.remotes).toEqual([{ name: "origin", url: "git@github.com:example/repo.git" }]);
     }).pipe(Effect.provide(platform)),
   );
+
+  it.effect("prefers raw push URLs when enumerating remotes", () =>
+    Effect.gen(function* () {
+      const root = yield* tempDir();
+      const repo = join(root, "repo");
+
+      yield* mkdirp(repo);
+      yield* shell(repo, "git", ["init", "-b", "main"]);
+      yield* shell(repo, "git", ["remote", "add", "origin", "git@github.com:upstream/repo.git"]);
+      yield* shell(repo, "git", [
+        "remote",
+        "set-url",
+        "--push",
+        "origin",
+        "git@github.com:fork/repo.git",
+      ]);
+
+      const cfgLayer = StackConfig.layer({ root: repo, trunks: ["main"] }).pipe(
+        Layer.provide(NodeServices.layer),
+      );
+      const remotes = yield* Effect.gen(function* () {
+        const git = yield* Git.Service;
+        return yield* git.remotes();
+      }).pipe(
+        Effect.provide(Git.live.pipe(Layer.provide(cfgLayer))),
+        Effect.provide(Proc.live),
+        Effect.provide(NodeServices.layer),
+      );
+
+      expect(remotes).toEqual([{ name: "origin", url: "git@github.com:fork/repo.git" }]);
+    }).pipe(Effect.provide(platform)),
+  );
 });
 
 const makeSync = (codeHost: Partial<CodeHost.Interface> = {}) => {

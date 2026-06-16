@@ -25,6 +25,9 @@ const branchName = (ref: string) => ref.replace(/^refs\/heads\//, "");
 const targetRefName = (branch: string) =>
   branch.startsWith("refs/") ? branch : `refs/heads/${branch}`;
 
+const sameTargetBranch = (left: string, right: string) =>
+  targetRefName(left) === targetRefName(right);
+
 const LabelEntry = Schema.Union([Schema.String, Schema.Struct({ name: Schema.String })]);
 
 const labelName = (entry: typeof LabelEntry.Type): string =>
@@ -428,7 +431,11 @@ export const layer = Layer.effect(
     );
 
     const edit = Effect.fn("CodeHost.azuredevops.edit")((pr: number, base: string) =>
-      run(retargetArgs(ado, pr, base)).pipe(Effect.asVoid),
+      Effect.gen(function* () {
+        const current = yield* change(pr);
+        if (sameTargetBranch(String(current.base), base)) return;
+        yield* run(retargetArgs(ado, pr, base)).pipe(Effect.asVoid);
+      }),
     );
 
     const body = Effect.fn("CodeHost.azuredevops.body")((pr: number, body: string) =>

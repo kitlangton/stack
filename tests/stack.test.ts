@@ -2260,7 +2260,20 @@ describe("AzureDevOps", () => {
   });
 
   it.effect("retargets pull requests through az rest", () => {
-    const { calls, proc } = adoProc((tool) => (tool === "git" ? adoOrigin : ""));
+    const { calls, proc } = adoProc((tool, args) => {
+      if (tool === "git") return adoOrigin;
+      if (tool === "az" && args.includes("show")) {
+        return JSON.stringify({
+          pullRequestId: 7,
+          title: "Feature",
+          sourceRefName: "refs/heads/feature",
+          targetRefName: "refs/heads/dev",
+          status: "active",
+          labels: null,
+        });
+      }
+      return "";
+    });
 
     return Effect.gen(function* () {
       const ado = yield* CodeHost.Service;
@@ -2268,6 +2281,18 @@ describe("AzureDevOps", () => {
 
       expect(calls).toEqual([
         ["git", "remote", "get-url", "origin"],
+        [
+          "az",
+          "repos",
+          "pr",
+          "show",
+          "--id",
+          "7",
+          "--output",
+          "json",
+          "--organization",
+          "https://dev.azure.com/myorg",
+        ],
         [
           "az",
           "rest",
@@ -2281,6 +2306,33 @@ describe("AzureDevOps", () => {
           '{"targetRefName":"refs/heads/main"}',
         ],
       ]);
+    }).pipe(Effect.provide(adoLayer(proc)));
+  });
+
+  it.effect("skips az rest when pull request already targets the branch", () => {
+    const { calls, proc } = adoProc((tool, args) => {
+      if (tool === "git") return adoOrigin;
+      if (tool === "az" && args.includes("show")) {
+        return JSON.stringify({
+          pullRequestId: 11542,
+          title: "Default Interest",
+          sourceRefName: "refs/heads/default-interest-mid-period",
+          targetRefName: "refs/heads/dev",
+          status: "active",
+          labels: null,
+        });
+      }
+      return "";
+    });
+
+    return Effect.gen(function* () {
+      const ado = yield* CodeHost.Service;
+      yield* ado.edit(11542, "dev");
+      yield* ado.edit(11542, "refs/heads/dev");
+
+      expect(calls.filter((call) => call[0] === "az" && call[1] === "rest")).toEqual([]);
+      expect(calls.filter((call) => call[0] === "az" && call[2] === "pr" && call[3] === "show"))
+        .toHaveLength(2);
     }).pipe(Effect.provide(adoLayer(proc)));
   });
 

@@ -17,6 +17,9 @@ import { StackConfig } from "../Config.ts";
 import { CodeHost } from "../CodeHost.ts";
 import { CodeHostMemory } from "./Memory.ts";
 
+/** Azure DevOps enterprise app — required `az rest --resource` for dev.azure.com APIs. */
+export const restResource = "499b84ac-1321-427f-aa17-267ca6975798";
+
 const branchName = (ref: string) => ref.replace(/^refs\/heads\//, "");
 
 const targetRefName = (branch: string) =>
@@ -215,7 +218,7 @@ export const retargetArgs = (
   "--uri",
   `${ado.organizationUrl}/${encodeURIComponent(ado.project)}/_apis/git/repositories/${encodeURIComponent(ado.repository)}/pullrequests/${pr}?api-version=7.1`,
   "--resource",
-  ado.organizationUrl,
+  restResource,
   "--body",
   JSON.stringify({ targetRefName: targetRefName(base) }),
 ];
@@ -232,7 +235,7 @@ export const labelArgs = (
   "--uri",
   `${ado.organizationUrl}/${encodeURIComponent(ado.project)}/_apis/git/repositories/${encodeURIComponent(ado.repository)}/pullrequests/${prId}/labels?api-version=7.1`,
   "--resource",
-  ado.organizationUrl,
+  restResource,
   "--body",
   JSON.stringify({ name: label }),
 ];

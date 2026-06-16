@@ -2115,7 +2115,7 @@ describe("AzureDevOps", () => {
       "--uri",
       "https://dev.azure.com/myorg/myproject/_apis/git/repositories/myrepo/pullrequests/7/labels?api-version=7.1",
       "--resource",
-      "https://dev.azure.com/myorg",
+      CodeHostAzureDevOps.restResource,
       "--body",
       '{"name":"bug"}',
     ]);
@@ -2276,7 +2276,7 @@ describe("AzureDevOps", () => {
           "--uri",
           "https://dev.azure.com/myorg/myproject/_apis/git/repositories/myrepo/pullrequests/7?api-version=7.1",
           "--resource",
-          "https://dev.azure.com/myorg",
+          CodeHostAzureDevOps.restResource,
           "--body",
           '{"targetRefName":"refs/heads/main"}',
         ],
@@ -4952,7 +4952,7 @@ describe("CodeHost", () => {
       "--uri",
       `${ado.organizationUrl}/${ado.project}/_apis/git/repositories/${ado.repository}/pullrequests/11542?api-version=7.1`,
       "--resource",
-      ado.organizationUrl,
+      CodeHostAzureDevOps.restResource,
       "--body",
       '{"targetRefName":"refs/heads/dev"}',
     ]);

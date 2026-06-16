@@ -5083,7 +5083,24 @@ describe("CodeHost", () => {
     expect(row.status).toBe("active");
     expect(row.labels).toEqual([]);
     expect(row.description).toBe("PR body");
-    expect(row.url).toContain("pullRequests/11542");
+    expect(row.url).toBe(`${urlBase}/11542`);
+  });
+
+  it("replaces Azure DevOps REST list URLs with web pull request links", async () => {
+    const urlBase = "https://dev.azure.com/absinc/Net/_git/TheMortgageOfficeWeb/pullrequest";
+    const fixture = JSON.stringify([
+      {
+        pullRequestId: 11542,
+        title: "Feature",
+        sourceRefName: "refs/heads/feature/x",
+        targetRefName: "refs/heads/dev",
+        url: "https://absinc.visualstudio.com/01275bc9-fa4e-455f-96bd-02c72f098a4e/_apis/git/repositories/711f9f83-a600-40cd-a1f2-0d821e05eb0c/pullRequests/11542",
+      },
+    ]);
+    const rows = await Effect.runPromise(
+      CodeHostAzureDevOps.decodePullListFixture(["repos", "pr", "list"], fixture, urlBase),
+    );
+    expect(rows[0]?.url).toBe(`${urlBase}/11542`);
   });
 
   it("decodes Azure DevOps show JSON with WebApiTagDefinition labels", async () => {

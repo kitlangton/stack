@@ -28,6 +28,15 @@ const targetRefName = (branch: string) =>
 const sameTargetBranch = (left: string, right: string) =>
   targetRefName(left) === targetRefName(right);
 
+const isApiUrl = (url: string) => /\/_apis\/git\/repositories\//i.test(url);
+
+/** `az repos pr` often returns REST `url` values; status output needs the web pull request link. */
+export const pullRequestWebUrl = (
+  pullRequestId: number,
+  url: string | undefined,
+  urlBase: string,
+): string => (url && !isApiUrl(url) ? url : `${urlBase}/${pullRequestId}`);
+
 const LabelEntry = Schema.Union([Schema.String, Schema.Struct({ name: Schema.String })]);
 
 const labelName = (entry: typeof LabelEntry.Type): string =>
@@ -56,7 +65,7 @@ const normalizeListRow = (row: PRListRow, urlBase: string): PRData => ({
   title: row.title,
   sourceRefName: row.sourceRefName,
   targetRefName: row.targetRefName,
-  url: row.url ?? `${urlBase}/${row.pullRequestId}`,
+  url: pullRequestWebUrl(row.pullRequestId, row.url, urlBase),
   isDraft: row.isDraft ?? false,
 });
 
@@ -90,7 +99,7 @@ const normalizePRView = (row: PRViewRow, urlBase: string): PRViewData => ({
   description: row.description ?? "",
   sourceRefName: row.sourceRefName,
   targetRefName: row.targetRefName,
-  url: row.url ?? `${urlBase}/${row.pullRequestId}`,
+  url: pullRequestWebUrl(row.pullRequestId, row.url, urlBase),
   isDraft: row.isDraft ?? false,
   status: row.status ?? "active",
   labels: row.labels ?? [],
@@ -484,7 +493,7 @@ export const layer = Layer.effect(
         head: branchName(row.sourceRefName),
         headRepository: null,
         base: branchName(row.targetRefName),
-        url: row.url,
+        url: pullRequestWebUrl(row.pullRequestId, row.url, changeUrlBase),
         draft: row.isDraft,
       });
     });

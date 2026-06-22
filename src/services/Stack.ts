@@ -1338,7 +1338,7 @@ ${note}`;
                     StackBlock.render({
                       pulls: selectedPulls,
                       metas,
-                      chain: graph.explicitChainFor(String(pull.head)),
+                      chain: graph.displayChainFor(String(pull.head)),
                       completed,
                       branch: String(pull.head),
                       previous: meta.body,
@@ -1496,15 +1496,14 @@ ${note}`;
                 null)
               : null;
             const throughBranch = byPr ? String(byPr) : input;
-            const chain = graph.explicitChainFor(target);
+            const chain = graph.pathTo(throughBranch);
             const targetIndex = chain.indexOf(target);
-            const throughIndex = chain.indexOf(throughBranch);
-            if (throughIndex === -1 || throughIndex < targetIndex) {
+            if (targetIndex === -1) {
               return yield* Effect.fail(
                 new StackOperationError(`${through} is not in the current stack from ${target}`),
               );
             }
-            return throughBranch;
+            return { stop: throughBranch, chain: chain.slice(targetIndex) };
           }),
       );
 
@@ -1768,20 +1767,21 @@ ${note}`;
             return yield* Effect.fail(new StackOperationError("use --through only with --auto"));
           }
 
-          const stop = yield* throughTarget(branch, through);
+          const { stop, chain } = yield* throughTarget(branch, through);
           const items = new Array<string>();
-          let nextBranch = branch;
 
-          for (;;) {
-            const { target } = yield* landTarget(nextBranch);
+          for (const target of chain) {
             if (items.length > 0) items.push("");
             items.push(...(yield* landOne(target, { auto: true })));
             if (target === stop) {
               items.push(`merged through: ${stop}`);
               return items;
             }
-            nextBranch = undefined;
           }
+
+          return yield* Effect.fail(
+            new StackOperationError(`${through} is not in the current stack from ${chain[0]}`),
+          );
         });
       });
 

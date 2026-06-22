@@ -29,7 +29,8 @@ export interface StatusTree {
 export interface StackGraph {
   readonly report: StatusReport;
   readonly tree: StatusTree;
-  readonly explicitChainFor: (branch: string) => ReadonlyArray<string>;
+  readonly pathTo: (branch: string) => ReadonlyArray<string>;
+  readonly displayChainFor: (branch: string) => ReadonlyArray<string>;
   readonly rank: (branch: string) => number;
   readonly rootOf: (branch: string) => string;
   readonly wouldCreateCycle: (branch: string, parent: string) => boolean;
@@ -158,28 +159,45 @@ export const make = (input: StackGraphInput): StackGraph => {
   });
   const tree = treeFromStatus(report);
 
-  const explicitChainFor = (branch: string) => {
-    let root = branch;
-    const seenRoots = new Set<string>();
-    for (;;) {
-      if (seenRoots.has(root)) break;
-      seenRoots.add(root);
-      const link = links.get(root);
+  const pathTo = (branch: string) => {
+    const chain = new Array<string>();
+    const seen = new Set<string>();
+    let name: string | null = branch;
+
+    while (name) {
+      if (seen.has(name)) break;
+      seen.add(name);
+      chain.push(name);
+      const link = links.get(name);
       if (!link || trunks.has(String(link.parent))) break;
-      root = String(link.parent);
+      name = String(link.parent);
     }
 
-    const chain = [root];
-    const seenChain = new Set(chain);
+    return chain.reverse();
+  };
+
+  const children = new Map<string, Array<string>>();
+  for (const link of input.state.links) {
+    const parent = String(link.parent);
+    const list = children.get(parent) ?? [];
+    list.push(String(link.branch));
+    children.set(parent, list);
+  }
+  for (const list of children.values()) list.sort((a, b) => a.localeCompare(b));
+
+  const displayChainFor = (branch: string) => {
+    const chain = Array.from(pathTo(branch));
+    const seen = new Set(chain);
+    let name = branch;
+
     for (;;) {
-      const next = input.state.links.find(
-        (link) => String(link.parent) === chain[chain.length - 1],
-      );
-      if (!next) break;
-      const name = String(next.branch);
-      if (seenChain.has(name)) break;
-      seenChain.add(name);
-      chain.push(name);
+      const kids = children.get(name) ?? [];
+      if (kids.length !== 1) break;
+      const child = kids[0]!;
+      if (seen.has(child)) break;
+      seen.add(child);
+      chain.push(child);
+      name = child;
     }
 
     return chain;
@@ -209,7 +227,8 @@ export const make = (input: StackGraphInput): StackGraph => {
   return {
     report,
     tree,
-    explicitChainFor,
+    pathTo,
+    displayChainFor,
     rank,
     rootOf,
     wouldCreateCycle: (branch: string, parent: string) =>

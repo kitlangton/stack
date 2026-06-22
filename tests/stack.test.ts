@@ -754,6 +754,8 @@ const makeLand = (
   currentBranch = "stack-a",
   progress: Array<Progress.ProgressEvent> | null = null,
   codeHost: Partial<CodeHost.Interface> = {},
+  includeUnrelatedRoot = false,
+  forkStackC = false,
 ) => {
   const seen: Array<string> = [];
   const refs = new Map([
@@ -762,6 +764,9 @@ const makeLand = (
     ["stack-b", branchRef({ name: "stack-b", head: "stack-b-1" })],
     ["stack-c", branchRef({ name: "stack-c", head: "stack-c-1" })],
   ]);
+  if (includeUnrelatedRoot) {
+    refs.set("other-root", branchRef({ name: "other-root", head: "other-root-1" }));
+  }
   let pulls = [
     pullRef({
       number: 4,
@@ -780,18 +785,64 @@ const makeLand = (
     pullRef({
       number: 3,
       head: "stack-c",
-      base: "stack-b",
+      base: forkStackC ? "stack-a" : "stack-b",
       url: "u3",
       draft: false,
     }),
   ];
+  if (includeUnrelatedRoot) {
+    pulls = [
+      ...pulls,
+      pullRef({
+        number: 9,
+        head: "other-root",
+        base: "dev",
+        url: "u9",
+        draft: false,
+      }),
+    ];
+  }
   const bases = new Map([
     ["stack-a:dev", "dev-1"],
     ["stack-b:stack-a", "stack-a-1"],
+    ["stack-c:stack-a", "stack-a-1"],
     ["stack-c:stack-b", "stack-b-1"],
     ["stack-b:dev", "dev-1"],
   ]);
+  if (includeUnrelatedRoot) {
+    bases.set("other-root:dev", "dev-1");
+  }
   let merged = false;
+  const links = [
+    stackLink({
+      branch: "stack-a",
+      parent: "dev",
+      anchor: "dev-1",
+      pr: 4,
+    }),
+    stackLink({
+      branch: "stack-b",
+      parent: "stack-a",
+      anchor: "stack-a-1",
+      pr: 5,
+    }),
+    stackLink({
+      branch: "stack-c",
+      parent: forkStackC ? "stack-a" : "stack-b",
+      anchor: forkStackC ? "stack-a-1" : "stack-b-1",
+      pr: 3,
+    }),
+  ];
+  if (includeUnrelatedRoot) {
+    links.push(
+      stackLink({
+        branch: "other-root",
+        parent: "dev",
+        anchor: "dev-1",
+        pr: 9,
+      }),
+    );
+  }
 
   return {
     seen,
@@ -851,9 +902,11 @@ const makeLand = (
             Effect.succeed(
               parent === "dev" && branch === "stack-b"
                 ? ["b1"]
-                : parent === "stack-b" && branch === "stack-c"
+                : parent === "dev" && branch === "stack-c"
                   ? ["c1"]
-                  : [],
+                  : parent === "stack-b" && branch === "stack-c"
+                    ? ["c1"]
+                    : [],
             ),
           novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) =>
             Effect.succeed(commits),
@@ -914,26 +967,7 @@ const makeLand = (
         Store.memory(
           new StackState({
             version: 1,
-            links: [
-              stackLink({
-                branch: "stack-a",
-                parent: "dev",
-                anchor: "dev-1",
-                pr: 4,
-              }),
-              stackLink({
-                branch: "stack-b",
-                parent: "stack-a",
-                anchor: "stack-a-1",
-                pr: 5,
-              }),
-              stackLink({
-                branch: "stack-c",
-                parent: "stack-b",
-                anchor: "stack-b-1",
-                pr: 3,
-              }),
-            ],
+            links,
           }),
         ),
       ),
@@ -1140,7 +1174,10 @@ describe("StackGraph", () => {
 
     expect(graph.rootOf("stack-b")).toBe("stack-a");
     expect(graph.rank("stack-b")).toBe(2);
-    expect(graph.explicitChainFor("stack-b")).toEqual(["stack-a", "stack-b"]);
+    expect(graph.pathTo("stack-b")).toEqual(["stack-a", "stack-b"]);
+    expect(graph.pathTo("stack-c")).toEqual(["stack-a", "stack-c"]);
+    expect(graph.displayChainFor("stack-b")).toEqual(["stack-a", "stack-b"]);
+    expect(graph.displayChainFor("stack-c")).toEqual(["stack-a", "stack-c"]);
     expect(graph.wouldCreateCycle("stack-a", "stack-b")).toBe(true);
   });
 });
@@ -2789,6 +2826,52 @@ describe("Stack", () => {
     }).pipe(Effect.provide(test.layer));
   });
 
+  it.effect("links keep the root PR first when rendering a linear stack", () => {
+    const bodies = new Map<number, string>();
+    const pulls = [
+      pullRef({ number: 1, head: "stack-a", base: "dev", url: "u1", draft: false }),
+      pullRef({ number: 2, head: "stack-b", base: "stack-a", url: "u2", draft: false }),
+      pullRef({ number: 3, head: "stack-c", base: "stack-b", url: "u3", draft: false }),
+    ];
+    const staleRoot = `<!-- stack:links:start -->
+### [Stack](https://github.com/kitlangton/stack)
+
+1. #2
+2. #3
+3. **#1** 👈 current
+<!-- stack:links:end -->`;
+    const layer = stackTestLayer({
+      current: "stack-a",
+      refs: [ref("dev"), ref("stack-a"), ref("stack-b"), ref("stack-c")],
+      pulls,
+      state: new StackState({
+        version: 1,
+        links: [
+          stackLink({ branch: "stack-a", parent: "dev", anchor: "dev", pr: 1 }),
+          stackLink({ branch: "stack-b", parent: "stack-a", anchor: "a", pr: 2 }),
+          stackLink({ branch: "stack-c", parent: "stack-b", anchor: "b", pr: 3 }),
+        ],
+      }),
+      service: {
+        change: (number) => {
+          const pull = pulls.find((item) => item.number === number)!;
+          return Effect.succeed(metaFor(pull, number === 1 ? staleRoot : "body"));
+        },
+        body: (number, body) => Effect.sync(() => void bodies.set(number, body)),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.links(true);
+
+      const body = bodies.get(1) ?? "";
+      expect(body).toContain("1. **#1** 👈 current");
+      expect(body).toContain("2. #2");
+      expect(body).toContain("3. #3");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("links use scannable GitLab MR references with titles", () => {
     const test = makeSync({
       provider: "gitlab",
@@ -3382,6 +3465,39 @@ describe("Stack", () => {
       expect(test.seen).toContain("auto 4");
       expect(test.seen).toContain("auto 5");
       expect(test.seen).not.toContain("auto 3");
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("land auto through stays on the selected stack when another root exists", () => {
+    const test = makeLand([], "stack-a", null, {}, true);
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const done = yield* stack.land(undefined, { auto: true, through: "5" });
+
+      expect(done).toContain("enable auto-merge #4 (stack-a)");
+      expect(done).toContain("enable auto-merge #5 (stack-b)");
+      expect(done).toContain("merged through: stack-b");
+      expect(done.join("\n")).not.toContain("multiple stack roots found");
+      expect(test.seen).toContain("auto 4");
+      expect(test.seen).toContain("auto 5");
+      expect(test.seen).not.toContain("auto 9");
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("land auto through follows the selected sibling branch", () => {
+    const test = makeLand([], "stack-a", null, {}, false, true);
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const done = yield* stack.land(undefined, { auto: true, through: "3" });
+
+      expect(done).toContain("enable auto-merge #4 (stack-a)");
+      expect(done).toContain("enable auto-merge #3 (stack-c)");
+      expect(done).toContain("merged through: stack-c");
+      expect(test.seen).toContain("auto 4");
+      expect(test.seen).toContain("auto 3");
+      expect(test.seen).not.toContain("auto 5");
     }).pipe(Effect.provide(test.layer));
   });
 

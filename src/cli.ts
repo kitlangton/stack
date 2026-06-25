@@ -71,7 +71,12 @@ includes open change details when the code host CLI (gh or glab) is available.
 
 Code host selection: github.com and gitlab.com are detected automatically. For
 enterprise hosts, run git config stack.codeHost github|gitlab. The temporary
-STACK_CODE_HOST=github|gitlab environment override takes precedence.`;
+STACK_CODE_HOST=github|gitlab environment override takes precedence.
+
+Trunk branches default to dev, main, and master. For repos that use additional
+trunks, configure them with git config --add stack.trunk <branch>. The temporary
+STACK_TRUNKS=branch[,branch...] environment value takes precedence over git
+config additions.`;
 
 const statusCommand = Command.make(
   "status",
@@ -311,6 +316,17 @@ const cli = Command.make("stack").pipe(
 export const runCli = (argv: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: pkg.version })(argv);
 
+export const configuredTrunks = (envValue: string | undefined, configValue: string) => {
+  const parse = (value: string) =>
+    value
+      .split(/[\s,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  const names = envValue ? parse(envValue) : parse(configValue);
+  return [...new Set<string>([...trunks, ...names])];
+};
+
 const live = (() => {
   const proc = Proc.live;
   const cfg = Layer.unwrap(
@@ -329,12 +345,18 @@ const live = (() => {
 
       const dir = yield* proc.exec(root, "git", ["rev-parse", "--git-common-dir"]);
       const git = path.isAbsolute(dir) ? dir : path.join(root, dir);
+      const trunkOut = yield* proc.exec(
+        root,
+        "git",
+        ["config", "--get-all", "stack.trunk"],
+        [0, 1],
+      );
 
       return StackConfig.layer({
         root,
         store: path.join(git, "stack", "state.json"),
         journal: path.join(git, "stack", "undo.json"),
-        trunks,
+        trunks: configuredTrunks(process.env.STACK_TRUNKS, trunkOut),
       });
     }),
   ).pipe(Layer.provideMerge(proc));

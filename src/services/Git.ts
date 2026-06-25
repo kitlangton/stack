@@ -3,7 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { BranchRef, branchRef, ExecError } from "../domain/model.ts";
+import { BranchRef, branchRef, DirtyWorktreeError, ExecError } from "../domain/model.ts";
 import * as Proc from "../platform/proc.ts";
 import { StackConfig } from "./Config.ts";
 
@@ -36,10 +36,16 @@ export interface Interface {
     branch: string,
     parent: string,
     commits: ReadonlyArray<string>,
-  ) => Effect.Effect<void, ExecError>;
-  readonly backup: (branch: string, name: string) => Effect.Effect<void, ExecError>;
+  ) => Effect.Effect<void, ExecError | DirtyWorktreeError>;
+  readonly backup: (
+    branch: string,
+    name: string,
+  ) => Effect.Effect<void, ExecError | DirtyWorktreeError>;
   readonly drop: (branch: string) => Effect.Effect<void, ExecError>;
-  readonly restore: (branch: string, name: string) => Effect.Effect<void, ExecError>;
+  readonly restore: (
+    branch: string,
+    name: string,
+  ) => Effect.Effect<void, ExecError | DirtyWorktreeError>;
   readonly push: (branch: string, remote?: string) => Effect.Effect<void, ExecError>;
 }
 
@@ -51,12 +57,71 @@ export const live = Layer.effect(
     const cfg = yield* StackConfig;
     const proc = yield* Proc.Service;
 
-    const run = Effect.fn("Git.run")(function* (
+    const runAt = Effect.fn("Git.runAt")(function* (
+      cwd: string,
       tool: string,
       args: ReadonlyArray<string>,
       ok: ReadonlyArray<number> = [0],
     ) {
-      return yield* proc.exec(cfg.root, tool, args, ok);
+      return yield* proc.exec(cwd, tool, args, ok);
+    });
+
+    const run = Effect.fn("Git.run")(
+      (tool: string, args: ReadonlyArray<string>, ok: ReadonlyArray<number> = [0]) =>
+        runAt(cfg.root, tool, args, ok),
+    );
+
+    const worktrees = Effect.fn("Git.worktrees")(() =>
+      run("git", ["worktree", "list", "--porcelain"]).pipe(
+        Effect.map((out) => {
+          const items: Array<{ readonly path: string; readonly branch: string }> = [];
+          let path: string | null = null;
+          let branch: string | null = null;
+          const flush = () => {
+            if (path && branch) items.push({ path, branch });
+            path = null;
+            branch = null;
+          };
+
+          for (const line of out.split("\n")) {
+            if (!line) {
+              flush();
+              continue;
+            }
+            if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
+            if (line.startsWith("branch refs/heads/")) {
+              branch = line.slice("branch refs/heads/".length);
+            }
+          }
+          flush();
+          return items;
+        }),
+      ),
+    );
+
+    const checkedOutWorktree = Effect.fn("Git.checkedOutWorktree")(function* (branch: string) {
+      const items = yield* worktrees();
+      return items.find((item) => item.branch === branch)?.path ?? null;
+    });
+
+    const dirtyAt = Effect.fn("Git.dirtyAt")((cwd: string) =>
+      runAt(cwd, "git", ["status", "--short"]).pipe(
+        Effect.map((out) => out.split("\n").filter(Boolean)),
+      ),
+    );
+
+    const moveBranch = Effect.fn("Git.moveBranch")(function* (branch: string, target: string) {
+      const path = yield* checkedOutWorktree(branch);
+      if (!path) {
+        yield* run("git", ["branch", "-f", branch, target]).pipe(Effect.asVoid);
+        return;
+      }
+
+      const lines = yield* dirtyAt(path);
+      if (lines.length > 0) {
+        return yield* Effect.fail(new DirtyWorktreeError(lines.map((line) => `${path}: ${line}`)));
+      }
+      yield* runAt(path, "git", ["reset", "--hard", target]).pipe(Effect.asVoid);
     });
 
     const refs = Effect.fn("Git.refs")(function* () {
@@ -165,7 +230,7 @@ export const live = Layer.effect(
         if (commits.length > 0) {
           yield* run("git", ["cherry-pick", "--empty=drop", ...commits]).pipe(Effect.asVoid);
         }
-        yield* run("git", ["branch", "-f", branch, temp]).pipe(Effect.asVoid);
+        yield* moveBranch(branch, temp);
       }).pipe(
         Effect.ensuring(
           abortCherryPick.pipe(Effect.ensuring(restoreCurrent.pipe(Effect.ensuring(deleteTemp)))),
@@ -173,13 +238,13 @@ export const live = Layer.effect(
       );
     });
     const backup = Effect.fn("Git.backup")((branch: string, name: string) =>
-      run("git", ["branch", "-f", name, branch]).pipe(Effect.asVoid),
+      moveBranch(name, branch),
     );
     const drop = Effect.fn("Git.drop")((branch: string) =>
       run("git", ["branch", "-D", branch], [0, 1]).pipe(Effect.asVoid),
     );
     const restore = Effect.fn("Git.restore")((branch: string, name: string) =>
-      run("git", ["branch", "-f", branch, name]).pipe(Effect.asVoid),
+      moveBranch(branch, name),
     );
     const push = Effect.fn("Git.push")((branch: string, remote = "origin") =>
       remote === "origin"

@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { ExecError, StackError } from "./domain/model.ts";
+import type { StackError } from "./domain/model.ts";
 import type { RebaseBranchPlan, RetargetPullPlan } from "./repairPlan.ts";
 import type { Interface as Git } from "./services/Git.ts";
 import * as StackResult from "./stackResult.ts";
@@ -11,7 +11,7 @@ interface Dependencies {
 
 export interface ApplyRebaseBranchDependencies extends Dependencies {
   readonly git: Pick<Git, "backup" | "replay" | "push">;
-  readonly onReplayFailure: (error: ExecError) => StackError;
+  readonly onReplayFailure: (error: StackError) => StackError;
 }
 
 export const applyRebaseBranch = Effect.fn("RepairExecution.applyRebaseBranch")(function* (

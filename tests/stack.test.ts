@@ -3565,6 +3565,48 @@ describe("Stack", () => {
     }).pipe(Effect.provide(platform)),
   );
 
+  it.effect("sync rebases a branch checked out in another worktree", () =>
+    Effect.gen(function* () {
+      const scenario = yield* realStack({
+        current: "dev",
+        branches: [
+          {
+            name: "stack-b",
+            parent: "dev",
+            number: 2,
+            commits: [{ file: "b.txt", body: "b1\n", message: "b1" }],
+          },
+          {
+            name: "stack-c",
+            parent: "stack-b",
+            number: 3,
+            commits: [{ file: "c.txt", body: "c\n", message: "c" }],
+          },
+        ],
+      });
+      const linked = join(scenario.repo, "..", "stack-c-worktree");
+
+      yield* scenario.git(["worktree", "add", linked, "stack-c"]);
+      yield* scenario.git(["checkout", "stack-b"]);
+      yield* commitFile(scenario.repo, "b2.txt", "b2\n", "b2");
+      yield* scenario.git(["push", "origin", "stack-b"]);
+
+      const items = yield* Effect.gen(function* () {
+        const stack = yield* Stack;
+        return yield* stack.sync({ apply: true });
+      }).pipe(Effect.provide(scenario.layer));
+
+      expect(items).toContain("   └─ ✓ stack-c #3 rebased onto stack-b");
+      expect(yield* scenario.git(["merge-base", "stack-c", "stack-b"])).toBe(
+        yield* scenario.git(["rev-parse", "stack-b"]),
+      );
+      expect(yield* shell(linked, "git", ["branch", "--show-current"])).toBe("stack-c");
+      expect(yield* shell(linked, "git", ["rev-parse", "HEAD"])).toBe(
+        yield* scenario.git(["rev-parse", "stack-c"]),
+      );
+    }).pipe(Effect.provide(platform)),
+  );
+
   it.effect("sync rebases a deep stack when PR 2 is refactored", () =>
     Effect.gen(function* () {
       const scenario = yield* realStack({

@@ -754,6 +754,35 @@ ${note}`;
               return [...remotes];
             });
 
+            const branchNeedsPush = Effect.fn("Stack.repairStack.branchNeedsPush")(function* (
+              branch: string,
+              remote: string,
+            ) {
+              const localHead = heads.get(branch);
+              if (!localHead) return false;
+
+              const remoteRef = `${remote}/${branch}`;
+              const remoteHead = yield* git.head(remoteRef);
+              if (Option.isNone(remoteHead)) return true;
+              if (localHead === remoteHead.value) return false;
+
+              const base = yield* git.base(branch, remoteRef);
+              return Option.isSome(base) && base.value === remoteHead.value;
+            });
+
+            const publishRemotes = Effect.fn("Stack.repairStack.publishRemotes")(function* (
+              branch: string,
+              headRepository: string | null,
+              change: number | null,
+            ) {
+              const remotes = yield* pushRemotes(branch, headRepository, change);
+              const needed = new Array<string>();
+              for (const remote of remotes) {
+                if (yield* branchNeedsPush(branch, remote)) needed.push(remote);
+              }
+              return needed;
+            });
+
             const backups = refs
               .map((ref) => ref.name)
               .filter(
@@ -917,6 +946,37 @@ ${note}`;
                 }
 
                 moved.add(link.branch);
+              } else if (pr && childBases.has(String(link.branch))) {
+                const targetRemotes = yield* publishRemotes(
+                  String(link.branch),
+                  headRepository,
+                  Number(pr.number),
+                );
+                if (targetRemotes.length > 0) {
+                  actions.push({
+                    _tag: "Push",
+                    mode,
+                    branch: String(link.branch),
+                    remotes: targetRemotes,
+                  });
+                  if (apply) {
+                    for (const remote of targetRemotes) {
+                      yield* step(
+                        StackResult.render(
+                          {
+                            _tag: "Push",
+                            mode,
+                            branch: String(link.branch),
+                            remotes: [remote],
+                          },
+                          reference,
+                          requestLabel,
+                        ),
+                      );
+                      yield* git.push(link.branch, remote);
+                    }
+                  }
+                }
               }
 
               const now = prs.get(link.branch) ?? null;

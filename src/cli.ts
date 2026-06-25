@@ -73,9 +73,10 @@ Code host selection: github.com and gitlab.com are detected automatically. For
 enterprise hosts, run git config stack.codeHost github|gitlab. The temporary
 STACK_CODE_HOST=github|gitlab environment override takes precedence.
 
-Trunk branches default to dev, main, and master. For repos that use a different
-trunk, configure it with git config --add stack.trunk <branch>. The temporary
-STACK_TRUNKS=branch[,branch...] environment override takes precedence.`;
+Trunk branches default to dev, main, and master. For repos that use additional
+trunks, configure them with git config --add stack.trunk <branch>. The temporary
+STACK_TRUNKS=branch[,branch...] environment value takes precedence over git
+config additions.`;
 
 const statusCommand = Command.make(
   "status",
@@ -315,7 +316,7 @@ const cli = Command.make("stack").pipe(
 export const runCli = (argv: ReadonlyArray<string>) =>
   Command.runWith(cli, { version: pkg.version })(argv);
 
-const configuredTrunks = (envValue: string | undefined, configValue: string) => {
+export const configuredTrunks = (envValue: string | undefined, configValue: string) => {
   const parse = (value: string) =>
     value
       .split(/[\s,]+/)
@@ -323,7 +324,7 @@ const configuredTrunks = (envValue: string | undefined, configValue: string) => 
       .filter(Boolean);
 
   const names = envValue ? parse(envValue) : parse(configValue);
-  return names.length > 0 ? [...new Set(names)] : trunks;
+  return [...new Set<string>([...trunks, ...names])];
 };
 
 const live = (() => {

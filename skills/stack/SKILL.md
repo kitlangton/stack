@@ -19,10 +19,11 @@ Install and authenticate the matching CLI before running `stack`. The
 `github.com` and `gitlab.com` hosts are detected automatically from `origin`.
 For an enterprise host, run `git config stack.codeHost github` or `git config
 stack.codeHost gitlab`; `STACK_CODE_HOST` is available as a temporary override.
-Trunk branches default to `dev`, `main`, and `master`. For repos that use a
-different trunk, configure the repo once with `git config --add stack.trunk
-develop`. Repeat `stack.trunk` for multiple trunks, or use `STACK_TRUNKS` as a
-temporary comma/space-separated override.
+Trunk branches default to `dev`, `main`, and `master`. For repos that use
+additional trunks, configure the repo once with `git config --add stack.trunk
+develop`. Repeat `stack.trunk` for multiple trunks; configured trunks are added
+to the defaults. Use `STACK_TRUNKS` as temporary comma/space-separated additions
+that take precedence over git config additions.
 
 Keep ordinary editing and commits on plain `git`. Use `stack` only for stack
 intent, stack inspection, sync, merge, and undo workflows.

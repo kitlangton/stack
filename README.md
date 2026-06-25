@@ -102,14 +102,16 @@ Use `STACK_CODE_HOST=github|gitlab` for a one-off override.
 ## Trunk Branches
 
 By default, `stack` treats `dev`, `main`, and `master` as trunk branches. For
-repos that use a different trunk, configure the repo once:
+repos that use additional trunks, configure the repo once:
 
 ```bash
 git config --add stack.trunk develop
 ```
 
-Multiple trunk branches are allowed by repeating `stack.trunk`. Use
-`STACK_TRUNKS=develop` or `STACK_TRUNKS=develop,main` for a one-off override.
+Multiple trunk branches are allowed by repeating `stack.trunk`; configured
+trunks are added to the defaults. Use `STACK_TRUNKS=develop` or
+`STACK_TRUNKS=develop,main` for one-off additions that take precedence over git
+config additions.
 
 ## Example Output
 

@@ -148,7 +148,7 @@ Apply:
 
 ```bash
 stack status             # inspect the relevant local stack
-stack guide              # print the agent/human happy path
+stack skill               # print the stack skill (agent instruction set)
 stack sync               # preview inference, repairs, and description updates
 stack sync --apply       # apply the previewed maintenance workflow
 stack sync <branch>      # preview only the stack containing branch

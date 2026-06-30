@@ -19,7 +19,7 @@
 ## Current commands
 
 - `status` shows the relevant tracked stack, including open change titles when the code host is available.
-- `guide` prints the opinionated happy path for agents and humans.
+- `skill` prints the stack skill (full agent instruction set) for AI agent discovery from the installed package.
 - `doctor` checks Git, code-host access, stack metadata, trunks, and undo journal health without mutating anything.
 - `track` records parentage for an existing branch only when change target branches do not already encode the stack.
 - `sync [branch]` previews target-branch inference, stale metadata cleanup, and repairs without mutating branches, requests, or stack metadata using the tree summary output.

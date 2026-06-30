@@ -1,5 +1,12 @@
 # @kitlangton/stack
 
+## 0.4.1
+
+### Patch Changes
+
+- 3b9322b: Recover stranded squash repair anchors: if `stack merge` persists state but aborts before descendant repair, a later `stack sync --apply` now uses the persisted anchor when it matches a `backup/landed-*` ref, so stranded descendants replay only their own commits instead of re-replaying the already-squashed parent.
+- 3b9322b: Detach clean sibling worktrees that own a landed branch before deleting it during `stack merge --apply` and `stack merge --auto` cleanup. Fails before hosted mutation when the target worktree is dirty.
+
 ## 0.4.0
 
 ### Minor Changes

@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
 import pkg from "../package.json" with { type: "json" };
+import skillContent from "../skills/stack/SKILL.md" with { type: "text" };
 import { BranchError, DirtyWorktreeError, ExecError, MergeBaseError } from "./domain/model.ts";
 import { renderStatus } from "./format.ts";
 import * as Proc from "./platform/proc.ts";
@@ -53,26 +54,6 @@ const continueOnFailure = Flag.boolean("continue-on-failure").pipe(
   ),
 );
 
-const guide = `Happy path for stacked changes (GitHub PRs / GitLab MRs)
-
-1. Open the changes with the right target branches.
-   - Root change: target is trunk, for example dev or main.
-   - Child change: target is the parent branch.
-
-2. Preview what stack will infer and repair.
-   stack sync
-
-3. Apply only after the preview looks right.
-   stack sync --apply
-
-Use stack status to verify the relevant tracked stack. It hides backup branches,
-focuses on the current stack instead of listing every local branch, and
-includes open change details when the code host CLI (gh or glab) is available.
-
-Code host selection: github.com and gitlab.com are detected automatically. For
-enterprise hosts, run git config stack.codeHost github|gitlab. The temporary
-STACK_CODE_HOST=github|gitlab environment override takes precedence.`;
-
 const statusCommand = Command.make(
   "status",
   {},
@@ -94,15 +75,15 @@ const statusCommand = Command.make(
   ),
 );
 
-const guideCommand = Command.make(
-  "guide",
+const skillCommand = Command.make(
+  "skill",
   {},
   Effect.fn(function* () {
-    yield* Console.log(guide);
+    yield* Console.log(skillContent);
   }),
 ).pipe(
   Command.withDescription(
-    "Show the opinionated happy path for agents and humans using stacked changes.",
+    "Print the stack skill (skills/stack/SKILL.md) for AI agent discovery from the installed package.",
   ),
 );
 
@@ -284,8 +265,8 @@ const cli = Command.make("stack").pipe(
   ),
   Command.withExamples([
     {
-      command: "stack guide",
-      description: "Show the recommended stacked change workflow",
+      command: "stack skill",
+      description: "Print the stack skill for AI agent discovery",
     },
     {
       command: "stack sync",
@@ -298,7 +279,7 @@ const cli = Command.make("stack").pipe(
   ]),
   Command.withSubcommands([
     statusCommand,
-    guideCommand,
+    skillCommand,
     trackCommand,
     syncCommand,
     doctorCommand,

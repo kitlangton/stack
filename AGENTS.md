@@ -37,6 +37,7 @@
 
 - Persist stack metadata in `.git/stack/state.json`.
 - Persist undo state in `.git/stack/undo.json`.
+- User preferences live in `git config stack.*` (read at startup in the CLI `live` layer), not in `state.json`. Current keys: `stack.codeHost`, `stack.trunks`, and `stack.blockLink` (default true; set false to render a plain `### Stack` heading without the attribution link).
 - Prefer `Context.Service`-based Effect services and test-first changes.
 - Use OpenCode-style service modules for deep seams: export `Interface`, `Service`, adapters like `layer`, `live`, or `memory`, and a namespace self-reexport such as `export * as CodeHost from "./CodeHost.ts"`; consumers import that named namespace directly from the module file.
 - Keep local Git behavior behind `Git` and pull/merge-request behavior behind `CodeHost`. Concrete backends live in `services/code-host/GitHub.ts` (via `gh`) and `services/code-host/GitLab.ts` (via `glab`), while their in-memory contract behavior is shared through `services/code-host/Memory.ts`; the CLI picks one backend at startup from `STACK_CODE_HOST`, `git config stack.codeHost`, or an unambiguous `origin` host. Stack orchestration depends on `CodeHost.Service` rather than shelling out to a host CLI directly.

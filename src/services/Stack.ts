@@ -1409,6 +1409,7 @@ ${note}`;
                       reference,
                       showTitles: codeHost.provider === "gitlab",
                       completedTitles,
+                      blockLink: cfg.blockLink,
                     }),
                   );
                   if (next === meta.body) return null;

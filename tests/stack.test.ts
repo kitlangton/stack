@@ -23,7 +23,12 @@ import * as Proc from "../src/platform/proc.ts";
 import { RepairExecution } from "../src/repairExecution.ts";
 import * as StackBlock from "../src/stackBlock.ts";
 import * as StackGraph from "../src/stackGraph.ts";
-import { parseTrunksConfig, StackConfig, trunks } from "../src/services/Config.ts";
+import {
+  parseBlockLinkConfig,
+  parseTrunksConfig,
+  StackConfig,
+  trunks,
+} from "../src/services/Config.ts";
 import { CodeHost } from "../src/services/CodeHost.ts";
 import { CodeHostGitHub } from "../src/services/code-host/GitHub.ts";
 import { CodeHostGitLab } from "../src/services/code-host/GitLab.ts";
@@ -1223,6 +1228,20 @@ describe("StackConfig", () => {
       "main",
       "master",
     ]);
+  });
+
+  it("parses stack.blockLink truthy and falsy values", () => {
+    expect(parseBlockLinkConfig("false")).toBe(false);
+    expect(parseBlockLinkConfig("off")).toBe(false);
+    expect(parseBlockLinkConfig("0")).toBe(false);
+    expect(parseBlockLinkConfig("true")).toBe(true);
+    expect(parseBlockLinkConfig("yes")).toBe(true);
+  });
+
+  it("treats an unset or unrecognized stack.blockLink as default (undefined)", () => {
+    expect(parseBlockLinkConfig("")).toBeUndefined();
+    expect(parseBlockLinkConfig("  ")).toBeUndefined();
+    expect(parseBlockLinkConfig("maybe")).toBeUndefined();
   });
 });
 
@@ -4822,6 +4841,32 @@ describe("StackBlock", () => {
     expect(block).toContain("2. **#2** 👈 current");
     expect(block).toContain("3. #3");
     expect(block).not.toContain("Feature A");
+  });
+
+  it("renders the linked attribution heading by default", () => {
+    const block = StackBlock.render({
+      pulls,
+      metas: new Map(),
+      chain: ["feat/a", "feat/b", "feat/c"],
+      branch: "feat/b",
+      previous: "",
+    });
+    expect(block).toContain("### [Stack](https://github.com/kitlangton/stack)");
+  });
+
+  it("renders a plain heading without the attribution link when blockLink is false", () => {
+    const block = StackBlock.render({
+      pulls,
+      metas: new Map(),
+      chain: ["feat/a", "feat/b", "feat/c"],
+      branch: "feat/b",
+      previous: "",
+      blockLink: false,
+    });
+    expect(block).toContain("### Stack");
+    expect(block).not.toContain("[Stack]");
+    expect(block).not.toContain("https://github.com/kitlangton/stack");
+    expect(block).toContain("2. **#2** 👈 current");
   });
 
   it("renders GitLab MR references using the code host reference formatter", () => {

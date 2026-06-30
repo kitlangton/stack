@@ -2,7 +2,8 @@ import { PullMeta, PullRef } from "./domain/model.ts";
 
 const start = "<!-- stack:links:start -->";
 const end = "<!-- stack:links:end -->";
-const heading = "### [Stack](https://github.com/kitlangton/stack)";
+const linkedHeading = "### [Stack](https://github.com/kitlangton/stack)";
+const plainHeading = "### Stack";
 
 const inlineTitle = (value: string | null) => {
   const title = value?.replace(/\s+/g, " ").trim();
@@ -84,9 +85,11 @@ export const render = (opts: {
   readonly reference?: (number: number) => string;
   readonly showTitles?: boolean;
   readonly completedTitles?: ReadonlyMap<number, string>;
+  readonly blockLink?: boolean;
 }) => {
   const reference = opts.reference ?? ((number: number) => `#${number}`);
   const showTitles = opts.showTitles ?? false;
+  const heading = (opts.blockLink ?? true) ? linkedHeading : plainHeading;
   const prs = new Map(opts.pulls.map((pull) => [String(pull.head), pull]));
   const chain = opts.chain;
   const liveKeys = new Set(

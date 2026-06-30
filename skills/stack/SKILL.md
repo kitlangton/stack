@@ -20,7 +20,9 @@ Install and authenticate the matching CLI before running `stack`. The
 For an enterprise host, run `git config stack.codeHost github` or `git config
 stack.codeHost gitlab`; `STACK_CODE_HOST` is available as a temporary override.
 Repos that use a trunk outside the default `dev`, `main`, and `master` set can
-configure trunks with `git config stack.trunks dev,develop,main,master`.
+configure trunks with `git config stack.trunks dev,develop,main,master`. To drop
+the attribution link from the stack block heading, run `git config
+stack.blockLink false` (it renders a plain `### Stack` heading).
 
 Keep ordinary editing and commits on plain `git`. Use `stack` only for stack
 intent, stack inspection, sync, merge, and undo workflows.

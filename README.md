@@ -108,6 +108,19 @@ that use another trunk, such as `develop`, can configure the trunk list:
 git config stack.trunks dev,develop,main,master
 ```
 
+## Stack Block Heading
+
+Each stack block has a heading that links back to this project. To render a
+plain `### Stack` heading without the attribution link — for example in
+enterprise repos where external links trip compliance checks — set:
+
+```bash
+git config stack.blockLink false
+```
+
+The linked heading stays on by default. This is repo-local; use
+`git config --global stack.blockLink false` to apply it everywhere.
+
 ## Example Output
 
 ```text

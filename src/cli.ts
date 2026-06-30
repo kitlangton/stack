@@ -13,7 +13,7 @@ import pkg from "../package.json" with { type: "json" };
 import { BranchError, DirtyWorktreeError, ExecError, MergeBaseError } from "./domain/model.ts";
 import { renderStatus } from "./format.ts";
 import * as Proc from "./platform/proc.ts";
-import { parseTrunksConfig, StackConfig, trunks } from "./services/Config.ts";
+import { parseBlockLinkConfig, parseTrunksConfig, StackConfig, trunks } from "./services/Config.ts";
 import { CodeHost } from "./services/CodeHost.ts";
 import { CodeHostGitHub } from "./services/code-host/GitHub.ts";
 import { CodeHostGitLab } from "./services/code-host/GitLab.ts";
@@ -336,12 +336,20 @@ const live = (() => {
         [0, 1],
       );
       const configuredTrunks = parseTrunksConfig(configuredTrunksOut);
+      const blockLinkOut = yield* proc.exec(
+        root,
+        "git",
+        ["config", "--get", "stack.blockLink"],
+        [0, 1],
+      );
+      const blockLink = parseBlockLinkConfig(blockLinkOut);
 
       return StackConfig.layer({
         root,
         store: path.join(git, "stack", "state.json"),
         journal: path.join(git, "stack", "undo.json"),
         trunks: configuredTrunks.length > 0 ? configuredTrunks : trunks,
+        blockLink,
       });
     }),
   ).pipe(Layer.provideMerge(proc));

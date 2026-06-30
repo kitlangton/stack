@@ -193,6 +193,12 @@ Mutating merge workflows stream progress while they run. Expect live progress fo
 retargeting, backup, merge/auto-merge, waiting, and cleanup before the final
 summary.
 
+Worktree cleanup has two separate cases. Descendant branches checked out in
+clean sibling worktrees can be repaired from their owning worktree; dirty owners
+fail before mutation. After a root lands, if the landed branch is checked out in
+a clean sibling worktree, Stack detaches that worktree at `HEAD` before deleting
+the local branch; a dirty owner fails before the hosted merge starts.
+
 ## Understand Or Undo The Last Mutation
 
 ```bash

@@ -90,6 +90,7 @@ const gitAndCodeHost = (service: Partial<Git.Interface & CodeHost.Interface>) =>
     commits: () => Effect.succeed([]),
     novel: (_parent, _branch, commits) => Effect.succeed(commits),
     replay: () => Effect.void,
+    release: () => Effect.void,
     backup: () => Effect.void,
     drop: () => Effect.void,
     restore: () => Effect.void,
@@ -830,7 +831,7 @@ const makeLand = (
   dirty: ReadonlyArray<string> = [],
   currentBranch = "stack-a",
   progress: Array<Progress.ProgressEvent> | null = null,
-  codeHost: Partial<CodeHost.Interface> = {},
+  codeHost: Partial<Git.Interface & CodeHost.Interface> = {},
   includeUnrelatedRoot = false,
   forkStackC = false,
 ) => {
@@ -993,6 +994,7 @@ const makeLand = (
               refs.set(branch, branchRef({ name: branch, head: `${branch}-2` }));
               bases.set(`${branch}:${parent}`, refs.get(parent)?.head ?? "");
             }),
+          release: (branch: string) => Effect.sync(() => void seen.push(`release ${branch}`)),
           backup: (branch: string, name: string) =>
             Effect.sync(() => void seen.push(`backup ${branch} ${name}`)),
           drop: (branch: string) => Effect.sync(() => void seen.push(`drop ${branch}`)),
@@ -1405,6 +1407,75 @@ describe("Git", () => {
         expect(error.stderr).toContain("stack-b-worktree");
         expect(error.stderr).toContain("?? dirty.txt");
         expect(yield* shell(repo, "git", ["rev-parse", "stack-b"])).toBe(original);
+      }).pipe(Effect.provide(platform)),
+    15_000,
+  );
+
+  it.effect(
+    "release detaches a clean owning worktree",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* tempDir();
+        const repo = join(root, "repo");
+        const sibling = join(root, "stack-b-worktree");
+
+        yield* mkdirp(repo);
+        yield* shell(repo, "git", ["init", "-b", "dev"]);
+        yield* shell(repo, "git", ["config", "user.email", "stack@example.com"]);
+        yield* shell(repo, "git", ["config", "user.name", "Stack Test"]);
+        yield* commitFile(repo, "base.txt", "base\n", "base");
+
+        yield* shell(repo, "git", ["checkout", "-b", "stack-b"]);
+        yield* commitFile(repo, "b.txt", "b1\n", "b1");
+        const stackBTip = yield* shell(repo, "git", ["rev-parse", "stack-b"]);
+        yield* shell(repo, "git", ["checkout", "dev"]);
+        yield* shell(repo, "git", ["worktree", "add", sibling, "stack-b"]);
+
+        const cfgLayer = StackConfig.layer({ root: repo, trunks: ["dev"] }).pipe(
+          Layer.provide(NodeServices.layer),
+        );
+
+        yield* Effect.gen(function* () {
+          const git = yield* Git.Service;
+          yield* git.release("stack-b");
+        }).pipe(Effect.provide(Git.live.pipe(Layer.provide(cfgLayer))));
+
+        expect(yield* shell(sibling, "git", ["branch", "--show-current"])).toBe("");
+        expect(yield* shell(sibling, "git", ["rev-parse", "HEAD"])).toBe(stackBTip);
+        expect(yield* shell(repo, "git", ["rev-parse", "--verify", "stack-b"])).toBe(stackBTip);
+      }).pipe(Effect.provide(platform)),
+    15_000,
+  );
+
+  it.effect(
+    "release no-ops when branch is not checked out elsewhere",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* tempDir();
+        const repo = join(root, "repo");
+
+        yield* mkdirp(repo);
+        yield* shell(repo, "git", ["init", "-b", "dev"]);
+        yield* shell(repo, "git", ["config", "user.email", "stack@example.com"]);
+        yield* shell(repo, "git", ["config", "user.name", "Stack Test"]);
+        yield* commitFile(repo, "base.txt", "base\n", "base");
+
+        yield* shell(repo, "git", ["checkout", "-b", "stack-b"]);
+        yield* commitFile(repo, "b.txt", "b1\n", "b1");
+        const stackBTip = yield* shell(repo, "git", ["rev-parse", "stack-b"]);
+        yield* shell(repo, "git", ["checkout", "dev"]);
+
+        const cfgLayer = StackConfig.layer({ root: repo, trunks: ["dev"] }).pipe(
+          Layer.provide(NodeServices.layer),
+        );
+
+        yield* Effect.gen(function* () {
+          const git = yield* Git.Service;
+          yield* git.release("stack-b");
+        }).pipe(Effect.provide(Git.live.pipe(Layer.provide(cfgLayer))));
+
+        expect(yield* shell(repo, "git", ["branch", "--show-current"])).toBe("dev");
+        expect(yield* shell(repo, "git", ["rev-parse", "--verify", "stack-b"])).toBe(stackBTip);
       }).pipe(Effect.provide(platform)),
     15_000,
   );
@@ -3716,6 +3787,56 @@ describe("Stack", () => {
     }).pipe(Effect.provide(test.layer));
   });
 
+  it.effect("land apply releases a clean checked-out target before deleting it", () => {
+    const test = makeLand([], "dev", null, {
+      worktrees: () =>
+        Effect.succeed([
+          {
+            path: "/tmp/stack-a-worktree",
+            head: "stack-a-1",
+            branch: "stack-a",
+            dirty: [],
+          },
+        ]),
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.land("stack-a", { apply: true });
+
+      const release = test.seen.indexOf("release stack-a");
+      const drop = test.seen.indexOf("drop stack-a");
+      expect(release).toBeGreaterThan(-1);
+      expect(drop).toBeGreaterThan(release);
+      expect(test.seen.indexOf("merge 4")).toBeLessThan(release);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("land auto releases a clean checked-out target before deleting it", () => {
+    const test = makeLand([], "dev", null, {
+      worktrees: () =>
+        Effect.succeed([
+          {
+            path: "/tmp/stack-a-worktree",
+            head: "stack-a-1",
+            branch: "stack-a",
+            dirty: [],
+          },
+        ]),
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.land("stack-a", { auto: true });
+
+      const release = test.seen.indexOf("release stack-a");
+      const drop = test.seen.indexOf("drop stack-a");
+      expect(release).toBeGreaterThan(-1);
+      expect(drop).toBeGreaterThan(release);
+      expect(test.seen.indexOf("wait 4 merged")).toBeLessThan(release);
+    }).pipe(Effect.provide(test.layer));
+  });
+
   it.effect("land auto can merge through a target PR", () => {
     const test = makeLand();
 
@@ -4457,6 +4578,56 @@ describe("Stack", () => {
         ),
       );
       expect(err).toContain("worktree is dirty");
+      expect(test.seen).toEqual([]);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("land apply refuses a dirty target worktree before merging the root", () => {
+    const test = makeLand([], "dev", null, {
+      worktrees: () =>
+        Effect.succeed([
+          {
+            path: "/tmp/stack-a-worktree",
+            head: "stack-a-1",
+            branch: "stack-a",
+            dirty: ["?? dirty.txt"],
+          },
+        ]),
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const error = yield* Effect.flip(stack.land("stack-a", { apply: true }));
+
+      expect(error).toBeInstanceOf(StackOperationError);
+      expect(error.message).toContain("Cannot repair checked-out dirty worktree branches");
+      expect(error.message).toContain("stack-a -> /tmp/stack-a-worktree");
+      expect(error.message).toContain("?? dirty.txt");
+      expect(test.seen).toEqual([]);
+    }).pipe(Effect.provide(test.layer));
+  });
+
+  it.effect("land auto refuses a dirty target worktree before merging the root", () => {
+    const test = makeLand([], "dev", null, {
+      worktrees: () =>
+        Effect.succeed([
+          {
+            path: "/tmp/stack-a-worktree",
+            head: "stack-a-1",
+            branch: "stack-a",
+            dirty: ["?? dirty.txt"],
+          },
+        ]),
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      const error = yield* Effect.flip(stack.land("stack-a", { auto: true }));
+
+      expect(error).toBeInstanceOf(StackOperationError);
+      expect(error.message).toContain("Cannot repair checked-out dirty worktree branches");
+      expect(error.message).toContain("stack-a -> /tmp/stack-a-worktree");
+      expect(error.message).toContain("?? dirty.txt");
       expect(test.seen).toEqual([]);
     }).pipe(Effect.provide(test.layer));
   });

@@ -1,5 +1,11 @@
 # @kitlangton/stack
 
+## 0.3.2
+
+### Patch Changes
+
+- 7aa7d11: Tolerate non-JSON warnings (e.g. auth expiry notices) emitted before `gh pr view` JSON output. The decoder now extracts the JSON payload from stdout instead of requiring the entire output to be valid JSON.
+
 ## 0.3.1
 
 ### Patch Changes

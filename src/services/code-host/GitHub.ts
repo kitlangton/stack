@@ -51,21 +51,31 @@ class PullListData extends Schema.Class<PullListData>("PullListData")({
 
 const PullListJson = Schema.Array(Schema.Array(PullListData));
 
+const extractJson = (out: string): string => {
+  const start = out.search(/[[{]/);
+  if (start === -1) return out;
+  const opener = out[start];
+  const closer = opener === "{" ? "}" : "]";
+  const end = out.lastIndexOf(closer);
+  if (end === -1 || end < start) return out;
+  return out.slice(start, end + 1);
+};
+
 const decodePullList = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
-    try: () => Schema.decodeUnknownSync(PullListJson)(JSON.parse(out)),
+    try: () => Schema.decodeUnknownSync(PullListJson)(JSON.parse(extractJson(out))),
     catch: (err) => new CodeHostDecodeError("gh", args, out, String(err)),
   });
 
 const decodePullView = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
-    try: () => Schema.decodeUnknownSync(PullView)(JSON.parse(out)),
+    try: () => Schema.decodeUnknownSync(PullView)(JSON.parse(extractJson(out))),
     catch: (err) => new CodeHostDecodeError("gh", args, out, String(err)),
   });
 
 const decodePullWatch = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
-    try: () => Schema.decodeUnknownSync(PullWatch)(JSON.parse(out)),
+    try: () => Schema.decodeUnknownSync(PullWatch)(JSON.parse(extractJson(out))),
     catch: (err) => new CodeHostDecodeError("gh", args, out, String(err)),
   });
 

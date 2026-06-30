@@ -1611,6 +1611,40 @@ describe("GitHub", () => {
     );
   });
 
+  it.effect("tolerates non-JSON warnings emitted before gh pr view output", () => {
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: () =>
+          Effect.sync(() =>
+            [
+              "warning: authentication token expires soon, run gh auth refresh",
+              JSON.stringify({
+                number: 1,
+                title: "one",
+                body: "body",
+                headRefName: "one",
+                headRepository: { nameWithOwner: "owner/project" },
+                baseRefName: "main",
+                url: "u1",
+                isDraft: false,
+                labels: [],
+              }),
+            ].join("\n"),
+          ),
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const github = yield* CodeHost.Service;
+      const meta = yield* github.change(1);
+      expect(Number(meta.number)).toBe(1);
+      expect(meta.title).toBe("one");
+    }).pipe(
+      Effect.provide(CodeHostGitHub.layer.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc))),
+    );
+  });
+
   it.effect("resolves a created GitHub fork PR by its returned URL", () => {
     const calls: Array<ReadonlyArray<string>> = [];
     const proc = Layer.succeed(

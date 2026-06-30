@@ -1,5 +1,11 @@
 # @kitlangton/stack
 
+## 0.3.1
+
+### Patch Changes
+
+- 21d7334: Skip re-pushing branches that are already at the correct repaired tip during `stack sync --apply`. Previously, repairing a parent caused all descendants to be re-replayed and re-pushed even when their base already matched the parent's new tip, creating unnecessary CI/deploy churn on deep stacks. Dry-run previews and the pre-flight dirty-worktree gate remain conservative.
+
 ## 0.3.0
 
 ### Minor Changes

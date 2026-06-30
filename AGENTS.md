@@ -11,7 +11,7 @@
 
 - Bare `stack sync` must stay non-mutating, including scoped and keep-going runs.
 - Mutating commands need an explicit mode: `--apply`, or `merge --auto` for code-host auto-merge plus descendant repair.
-- Never mutate trunk branches like `dev`, `main`, or `master`.
+- Never mutate configured trunk branches like `dev`, `main`, or `master`.
 - Before rebasing a branch, create a local backup branch.
 - Before repair mutates Git or a hosted change, save an undo checkpoint. Merge child retargets use a pre-merge recovery journal; after the root lands, descendant repair starts from a post-merge baseline that never retargets children back onto the landed branch.
 - `stack undo` should restore the last applied mutation from the saved journal.

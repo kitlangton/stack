@@ -45,6 +45,7 @@ export interface Interface {
     parent: string,
     commits: ReadonlyArray<string>,
   ) => Effect.Effect<void, ExecError>;
+  readonly release: (branch: string) => Effect.Effect<void, ExecError>;
   readonly backup: (branch: string, name: string) => Effect.Effect<void, ExecError>;
   readonly drop: (branch: string) => Effect.Effect<void, ExecError>;
   readonly restore: (branch: string, name: string) => Effect.Effect<void, ExecError>;
@@ -139,6 +140,19 @@ export const live = Layer.effect(
           ...worktree.dirty.map((line) => `  ${line}`),
           "",
           `Commit, stash, or clean that worktree before repairing ${branch}.`,
+        ].join("\n"),
+      );
+
+    const releaseDirtyError = (branch: string, worktree: Worktree) =>
+      new ExecError(
+        "git",
+        ["release", branch],
+        1,
+        [
+          `${branch} is checked out at ${worktree.path} with local changes:`,
+          ...worktree.dirty.map((line) => `  ${line}`),
+          "",
+          `Commit, stash, or clean that worktree before releasing ${branch}.`,
         ].join("\n"),
       );
 
@@ -269,6 +283,17 @@ export const live = Layer.effect(
     const backup = Effect.fn("Git.backup")((branch: string, name: string) =>
       run("git", ["branch", "-f", name, branch]).pipe(Effect.asVoid),
     );
+    const release = Effect.fn("Git.release")(function* (branch: string) {
+      const owner =
+        (yield* worktrees()).find(
+          (worktree) => worktree.branch === branch && worktree.path !== cfg.root,
+        ) ?? null;
+      if (!owner) return;
+      if (owner.dirty.length > 0) {
+        return yield* Effect.fail(releaseDirtyError(branch, owner));
+      }
+      return yield* runAt(owner.path, "git", ["checkout", "--detach", "HEAD"]).pipe(Effect.asVoid);
+    });
     const drop = Effect.fn("Git.drop")(function* (branch: string) {
       const owner =
         (yield* worktrees()).find(
@@ -311,6 +336,7 @@ export const live = Layer.effect(
       commits,
       novel,
       replay,
+      release,
       backup,
       drop,
       restore,
@@ -350,6 +376,7 @@ export const test = (opts: {
       commits: () => Effect.succeed([]),
       novel: (_parent, _branch, commits) => Effect.succeed(commits),
       replay: () => Effect.void,
+      release: () => Effect.void,
       backup: () => Effect.void,
       drop: () => Effect.void,
       restore: () => Effect.void,

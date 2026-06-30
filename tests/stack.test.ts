@@ -3081,6 +3081,46 @@ describe("Stack", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("sync uses persisted child anchor after merge state was stranded", () => {
+    const seen: Array<string> = [];
+    const pulls = [pr(2, "child", "dev")];
+    const layer = stackTestLayer({
+      current: "child",
+      refs: [
+        ref("dev", "dev-squash"),
+        ref("child", "child-head"),
+        ref("backup/landed-1700000000000-parent", "parent-tip"),
+      ],
+      pulls,
+      bases: bases(["child", "dev", "dev-old"]),
+      state: stackState([
+        stackLink({ branch: "child", parent: "dev", anchor: "parent-tip", pr: 2 }),
+      ]),
+      service: {
+        commits: (from: string, branch: string) =>
+          Effect.succeed(
+            branch === "child" && from === "parent-tip"
+              ? ["child-only"]
+              : branch === "child" && from === "dev-old"
+                ? ["parent-1", "parent-2", "child-only"]
+                : [],
+          ),
+        novel: (_parent: string, _branch: string, commits: ReadonlyArray<string>) =>
+          Effect.succeed(commits),
+        replay: (branch: string, parent: string, commits: ReadonlyArray<string>) =>
+          Effect.sync(() => seen.push(`rebase ${branch} ${parent} ${commits.join(",")}`)),
+      },
+    });
+
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.sync({ apply: true });
+
+      expect(seen).toContain("rebase child origin/dev child-only");
+      expect(seen).not.toContain("rebase child origin/dev parent-1,parent-2,child-only");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("undo restores the last applied mutation", () => {
     const test = makeSync();
 

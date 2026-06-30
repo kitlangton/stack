@@ -905,7 +905,7 @@ ${note}`;
               const drift =
                 replayAnchors.has(String(link.branch)) ||
                 parent !== link.parent ||
-                moved.has(parent) ||
+                (!apply && moved.has(parent)) ||
                 (want && (Option.isNone(have) || have.value !== want));
               const base = pr?.base ?? null;
               let backup: string | null = null;
@@ -975,6 +975,7 @@ ${note}`;
                     ? tip.value
                     : (want ?? heads.get(link.branch) ?? link.anchor);
                   heads.set(link.branch, head);
+                  tips.set(link.branch, head);
                   live.set(link.branch, branchRef({ name: link.branch, head }));
                 } else {
                   heads.set(link.branch, `planned/${link.branch}`);

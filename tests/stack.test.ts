@@ -4136,6 +4136,131 @@ describe("Stack", () => {
     }).pipe(Effect.provide(platform)),
   );
 
+  it.effect(
+    "sync --apply does not re-push a child that is already current when its parent is repaired",
+    () => {
+      const refs = new Map([
+        ["dev", branchRef({ name: "dev", head: "dev-2" })],
+        ["stack-a", branchRef({ name: "stack-a", head: "stack-a-1" })],
+        ["stack-b", branchRef({ name: "stack-b", head: "stack-b-1" })],
+      ]);
+      const pulls = [
+        pullRef({ number: 4, head: "stack-a", base: "dev", url: "u4", draft: false }),
+        pullRef({ number: 5, head: "stack-b", base: "stack-a", url: "u5", draft: false }),
+      ];
+      const bases = new Map([
+        ["stack-a:dev", "dev-1"],
+        ["stack-a:origin/dev", "dev-1"],
+        ["stack-b:stack-a", "stack-a-1"],
+      ]);
+      const metas = new Map([
+        [
+          4,
+          pullMeta({
+            number: 4,
+            title: "stack-a",
+            body: "body",
+            head: "stack-a",
+            base: "dev",
+            url: "u4",
+            draft: false,
+            state: "OPEN",
+            labels: [],
+          }),
+        ],
+        [
+          5,
+          pullMeta({
+            number: 5,
+            title: "stack-b",
+            body: "body",
+            head: "stack-b",
+            base: "stack-a",
+            url: "u5",
+            draft: false,
+            state: "OPEN",
+            labels: [],
+          }),
+        ],
+      ]);
+      const seen: Array<string> = [];
+
+      const layer = Stack.layer.pipe(
+        Layer.provideMerge(Progress.noop),
+        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(
+          StackConfig.layer({ root: "/tmp/stack", trunks: ["dev"] }).pipe(
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
+        Layer.provideMerge(
+          gitAndCodeHost({
+            dirty: () => Effect.succeed([]),
+            worktrees: () => Effect.succeed([]),
+            fetch: () => Effect.void,
+            refs: () => Effect.succeed(Array.from(refs.values())),
+            changes: () => Effect.succeed(pulls),
+            change: (pr: number) => Effect.succeed(metas.get(pr)!),
+            current: () => Effect.succeed("stack-b"),
+            head: (name: string) =>
+              Effect.succeed(
+                Option.fromNullishOr(
+                  refs.get(name)?.head ??
+                    (name.startsWith("origin/") ? refs.get(name.slice(7))?.head : undefined),
+                ),
+              ),
+            base: (branch: string, parent: string) =>
+              Effect.succeed(Option.fromNullishOr(bases.get(`${branch}:${parent}`))),
+            commits: () => Effect.succeed(["x"]),
+            novel: (_p: string, _b: string, commits: ReadonlyArray<string>) =>
+              Effect.succeed(commits),
+            backup: (branch: string, name: string) =>
+              Effect.sync(() => void seen.push(`backup ${branch} ${name}`)),
+            drop: () => Effect.void,
+            restore: () => Effect.void,
+            replay: (branch: string, parent: string) =>
+              Effect.sync(() => {
+                seen.push(`rebase ${branch} ${parent}`);
+              }),
+            push: (branch: string) => Effect.sync(() => void seen.push(`push ${branch}`)),
+            edit: (pr: number, base: string) =>
+              Effect.sync(() => void seen.push(`edit ${pr} ${base}`)),
+            body: (pr: number, body: string) =>
+              Effect.sync(() => void seen.push(`body ${pr} ${body.includes("### [Stack]")}`)),
+            close: () => Effect.void,
+            create: () =>
+              Effect.succeed(
+                pullRef({ number: 99, head: "x", base: "dev", url: "u", draft: false }),
+              ),
+            remote: () => Effect.succeed(Option.some("git@github.com:example/repo.git")),
+            remotes: () =>
+              Effect.succeed([{ name: "origin", url: "git@github.com:example/repo.git" }]),
+          }),
+        ),
+        Layer.provideMerge(
+          Store.memory(
+            new StackState({
+              version: 1,
+              links: [
+                stackLink({ branch: "stack-a", parent: "dev", anchor: "dev-1", pr: 4 }),
+                stackLink({ branch: "stack-b", parent: "stack-a", anchor: "stack-a-1", pr: 5 }),
+              ],
+            }),
+          ),
+        ),
+      );
+
+      return Effect.gen(function* () {
+        const stack = yield* Stack;
+        yield* stack.sync({ apply: true });
+
+        expect(seen).toContain("push stack-a");
+        expect(seen).not.toContain("rebase stack-b");
+        expect(seen).not.toContain("push stack-b");
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
   it.effect("sync infers stack links in a real git repository", () =>
     Effect.gen(function* () {
       const scenario = yield* realStack({

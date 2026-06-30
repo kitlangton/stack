@@ -1,5 +1,11 @@
 # @kitlangton/stack
 
+## 0.4.0
+
+### Minor Changes
+
+- f9652c5: Replace `stack guide` with `stack skill`, which prints the full `skills/stack/SKILL.md` agent instruction set. The skill content is embedded at build time via `with { type: "text" }` import, so it works from the installed package without a separate file lookup. The `guide` command is removed — `skill` supersedes it.
+
 ## 0.3.2
 
 ### Patch Changes

@@ -81,7 +81,7 @@ export const live = Layer.effect(
 
     const current = Effect.fn("Git.current")(() => run("git", ["branch", "--show-current"]));
     const remote = Effect.fn("Git.remote")(() =>
-      run("git", ["remote", "get-url", "origin"], [0, 1]).pipe(
+      run("git", ["config", "--get", "remote.origin.url"], [0, 1]).pipe(
         Effect.map((out) => (out ? Option.some(out) : Option.none<string>())),
       ),
     );
@@ -92,13 +92,13 @@ export const live = Layer.effect(
       run("git", ["fetch", "origin", "--prune"]).pipe(Effect.asVoid),
     );
     const remotes = Effect.fn("Git.remotes")(() =>
-      run("git", ["remote", "-v"], [0, 1]).pipe(
+      run("git", ["config", "--get-regexp", "^remote\\..*\\.(push)?url$"], [0, 1]).pipe(
         Effect.map((out) => {
           const map = new Map<string, string>();
           for (const line of out.split("\n").filter(Boolean)) {
-            const match = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+            const match = line.match(/^remote\.(.+)\.(push)?url\s+(.+)$/);
             if (!match) continue;
-            if (match[3] === "push" || !map.has(match[1]!)) map.set(match[1]!, match[2]!);
+            if (match[2] === "push" || !map.has(match[1]!)) map.set(match[1]!, match[3]!);
           }
           return [...map].map(([name, url]) => ({ name, url }));
         }),

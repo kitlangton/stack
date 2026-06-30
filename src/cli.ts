@@ -352,7 +352,7 @@ const live = (() => {
       const proc = yield* Proc.Service;
       const cfgValue = yield* StackConfig;
       const remoteOut = yield* proc
-        .exec(cfgValue.root, "git", ["remote", "get-url", "origin"], [0, 1])
+        .exec(cfgValue.root, "git", ["config", "--get", "remote.origin.url"], [0, 1])
         .pipe(Effect.catch(() => Effect.succeed("")));
       const configuredOut = yield* proc.exec(
         cfgValue.root,

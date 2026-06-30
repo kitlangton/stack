@@ -786,6 +786,11 @@ ${note}`;
                   name.startsWith("backup/landed-") || name.startsWith("backup/stack-sync-"),
               )
               .sort();
+            const landedBackupHeads = new Set(
+              refs
+                .filter((ref) => ref.name.startsWith("backup/landed-"))
+                .map((ref) => String(ref.head)),
+            );
             for (const name of backups) {
               for (const link of state.links) {
                 if (name.endsWith(`-${link.branch}`)) prior.set(String(link.branch), name);
@@ -930,7 +935,11 @@ ${note}`;
                   headRepository,
                   pr ? Number(pr.number) : link.pr ? Number(link.pr) : null,
                 );
-                const anchor = replayAnchors.get(String(link.branch));
+                const landedAnchor =
+                  trunk(parent) && landedBackupHeads.has(String(link.anchor))
+                    ? String(link.anchor)
+                    : null;
+                const anchor = replayAnchors.get(String(link.branch)) ?? landedAnchor;
                 const baseRef = anchor ? Option.some(anchor) : yield* git.base(link.branch, from);
                 const commitsToReplay = Option.isSome(baseRef)
                   ? yield* Effect.gen(function* () {

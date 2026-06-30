@@ -109,6 +109,8 @@ GitHub uses `#123`; GitLab uses `!123 - Title`.
   code host and repairs after the root lands).
 - Never mutate trunk branches (`dev`, `main`, `master`, or any configured trunk).
 - Before rebasing, the tool creates a local backup branch.
+- Clean sibling worktrees can own branches being repaired or cleaned up; dirty
+  sibling owners fail before mutation.
 - If a replay fails, the tool aborts the cherry-pick, restores the original
   branch, keeps backups and the undo journal, and tells you which branch to
   repair before running `stack sync --apply` again.

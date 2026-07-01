@@ -39,7 +39,12 @@ export class Store extends Context.Service<Store, StoreService>()("@stack/Store"
 
           return yield* Effect.try({
             try: () => parse(raw),
-            catch: (err) => new StateError(file, "decode", String(err)),
+            catch: (err) =>
+              new StateError(
+                file,
+                "decode",
+                `${err instanceof Error ? err.message : String(err)}\n\nThe file may be corrupt or from a future version. To recover, delete ${file} and rerun.`,
+              ),
           });
         });
 
@@ -49,9 +54,16 @@ export class Store extends Context.Service<Store, StoreService>()("@stack/Store"
             .makeDirectory(path.dirname(file), { recursive: true })
             .pipe(Effect.mapError((err) => new StateError(file, "mkdir", String(err))));
 
+          const tmp = `${file}.tmp`;
+          const body = `${JSON.stringify(encode(value), null, 2)}\n`;
+
           yield* fs
-            .writeFileString(file, `${JSON.stringify(encode(value), null, 2)}\n`)
-            .pipe(Effect.mapError((err) => new StateError(file, "write", String(err))));
+            .writeFileString(tmp, body)
+            .pipe(Effect.mapError((err) => new StateError(tmp, "write", String(err))));
+
+          yield* fs
+            .rename(tmp, file)
+            .pipe(Effect.mapError((err) => new StateError(file, "rename", String(err))));
         });
 
       const read = Effect.fn("Store.read")(() =>

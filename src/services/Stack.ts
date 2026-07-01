@@ -158,6 +158,9 @@ ${note}`;
             "",
             "Failed:",
             `  ${rebase.branch} could not be replayed onto ${rebase.parent}`,
+            ...(err._tag === "ReplayConflictError" && err.paths.length > 0
+              ? ["", "Conflicting paths:", ...err.paths.map((p) => `  ${p}`)]
+              : []),
             "",
             "Cleaned up:",
             `  backup created: ${rebase.backup}`,
@@ -172,7 +175,11 @@ ${note}`;
             "",
             "Git error:",
             err instanceof Error ? `  ${err.message}` : `  ${String(err)}`,
-            err._tag === "ExecError" && err.stderr ? `  ${err.stderr}` : null,
+            err._tag === "ExecError" && err.stderr
+              ? `  ${err.stderr}`
+              : err._tag === "ReplayConflictError" && err.stderr
+                ? `  ${err.stderr}`
+                : null,
           ]
             .filter((line): line is string => line !== null)
             .join("\n"),

@@ -3,7 +3,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { BranchRef, branchRef, ExecError } from "../domain/model.ts";
+import { BranchRef, branchRef, ExecError, ReplayConflictError } from "../domain/model.ts";
 import * as Proc from "../platform/proc.ts";
 import { StackConfig } from "./Config.ts";
 
@@ -44,7 +44,8 @@ export interface Interface {
     branch: string,
     parent: string,
     commits: ReadonlyArray<string>,
-  ) => Effect.Effect<void, ExecError>;
+  ) => Effect.Effect<void, ExecError | ReplayConflictError>;
+  readonly unmergedPaths: () => Effect.Effect<ReadonlyArray<string>, ExecError>;
   readonly release: (branch: string) => Effect.Effect<void, ExecError>;
   readonly backup: (branch: string, name: string) => Effect.Effect<void, ExecError>;
   readonly drop: (branch: string) => Effect.Effect<void, ExecError>;
@@ -235,6 +236,11 @@ export const live = Layer.effect(
         }),
       );
     });
+    const unmergedPaths = Effect.fn("Git.unmergedPaths")(() =>
+      run("git", ["diff", "--name-only", "--diff-filter=U"], [0, 1]).pipe(
+        Effect.map((out) => out.split("\n").filter(Boolean)),
+      ),
+    );
     const replay = Effect.fn("Git.replay")(function* (
       branch: string,
       parent: string,
@@ -266,6 +272,16 @@ export const live = Layer.effect(
         if (commits.length > 0) {
           yield* runAt(root, "git", ["cherry-pick", "--empty=drop", ...commits]).pipe(
             Effect.asVoid,
+            Effect.catchTag("ExecError", (err) =>
+              Effect.gen(function* () {
+                const paths = yield* unmergedPaths().pipe(
+                  Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)),
+                );
+                return yield* Effect.fail(
+                  new ReplayConflictError(branch, parent, paths, err.stderr),
+                );
+              }),
+            ),
           );
         }
         if (owner) {
@@ -336,6 +352,7 @@ export const live = Layer.effect(
       commits,
       novel,
       replay,
+      unmergedPaths,
       release,
       backup,
       drop,
@@ -376,6 +393,7 @@ export const test = (opts: {
       commits: () => Effect.succeed([]),
       novel: (_parent, _branch, commits) => Effect.succeed(commits),
       replay: () => Effect.void,
+      unmergedPaths: () => Effect.succeed([] as ReadonlyArray<string>),
       release: () => Effect.void,
       backup: () => Effect.void,
       drop: () => Effect.void,

@@ -207,6 +207,35 @@ export class StackOperationError extends Schema.TaggedErrorClass<StackOperationE
   }
 }
 
+export class ReplayConflictError extends Schema.TaggedErrorClass<ReplayConflictError>()(
+  "ReplayConflictError",
+  {
+    branch: Schema.String,
+    parent: Schema.String,
+    paths: Schema.Array(Schema.String),
+    stderr: Schema.String,
+    message: Schema.String,
+  },
+) {
+  constructor(
+    readonly branch: string,
+    readonly parent: string,
+    readonly paths: ReadonlyArray<string>,
+    readonly stderr: string,
+  ) {
+    super({
+      branch,
+      parent,
+      paths: Array.from(paths),
+      stderr,
+      message:
+        paths.length > 0
+          ? `cherry-pick of ${branch} onto ${parent} failed in: ${paths.join(", ")}`
+          : `cherry-pick of ${branch} onto ${parent} failed`,
+    });
+  }
+}
+
 export class CodeHostDecodeError extends Schema.TaggedErrorClass<CodeHostDecodeError>()(
   "CodeHostDecodeError",
   {
@@ -276,7 +305,8 @@ export type StackError =
   | BranchError
   | MergeBaseError
   | DirtyWorktreeError
-  | StackOperationError;
+  | StackOperationError
+  | ReplayConflictError;
 
 export const stackState = (links: ReadonlyArray<StackLink>) =>
   new StackState({ version, links: Array.from(links) });

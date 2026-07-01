@@ -13,6 +13,7 @@ import {
   PullLabel,
   pullMeta,
   pullRef,
+  ReplayConflictError,
   stackLink,
   StackOperationError,
   stackState,
@@ -90,6 +91,7 @@ const gitAndCodeHost = (service: Partial<Git.Interface & CodeHost.Interface>) =>
     commits: () => Effect.succeed([]),
     novel: (_parent, _branch, commits) => Effect.succeed(commits),
     replay: () => Effect.void,
+    unmergedPaths: () => Effect.succeed([] as ReadonlyArray<string>),
     release: () => Effect.void,
     backup: () => Effect.void,
     drop: () => Effect.void,
@@ -1316,7 +1318,7 @@ describe("Git", () => {
 
       const error = yield* Effect.flip(git.replay("stack-b", "dev", ["b1"]));
 
-      expect(error).toBeInstanceOf(ExecError);
+      expect(error).toBeInstanceOf(ReplayConflictError);
       const temp = calls[2]?.[3];
       expect(temp).toBe("stack/replay-1700000000000-stack-b");
       expect(calls).toEqual([
@@ -1324,6 +1326,7 @@ describe("Git", () => {
         ["git", "branch", "--show-current"],
         ["git", "checkout", "-B", temp, "dev"],
         ["git", "cherry-pick", "--empty=drop", "b1"],
+        ["git", "diff", "--name-only", "--diff-filter=U"],
         ["git", "cherry-pick", "--abort"],
         ["git", "checkout", "stack-c"],
         ["git", "branch", "-D", temp],

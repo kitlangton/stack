@@ -257,7 +257,7 @@ export class CodeHostDecodeError extends Schema.TaggedErrorClass<CodeHostDecodeE
       args: Array.from(args),
       output,
       detail,
-      message: `${tool} ${args.join(" ")} returned invalid JSON`,
+      message: `${tool} ${args.join(" ")} returned unexpected output: ${detail}`,
     });
   }
 }

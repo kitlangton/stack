@@ -21,7 +21,13 @@ class PullView extends Schema.Class<PullView>("PullView")({
   title: Schema.String,
   body: Schema.String,
   headRefName: Schema.String,
-  headRepository: Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String })),
+  headRepository: Schema.NullOr(
+    Schema.Struct({
+      name: Schema.optional(Schema.String),
+      nameWithOwner: Schema.optional(Schema.String),
+    }),
+  ),
+  headRepositoryOwner: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
   baseRefName: Schema.String,
   url: Schema.String,
   isDraft: Schema.Boolean,
@@ -93,13 +99,22 @@ const listRef = (row: PullListData) =>
     draft: row.draft,
   });
 
+const nameWithOwner = (row: PullView): string | null => {
+  const repo = row.headRepository;
+  if (!repo) return null;
+  if (repo.nameWithOwner) return repo.nameWithOwner.toLowerCase();
+  const owner = row.headRepositoryOwner?.login;
+  if (owner && repo.name) return `${owner}/${repo.name}`.toLowerCase();
+  return null;
+};
+
 const meta = (row: PullView) =>
   pullMeta({
     number: row.number,
     title: row.title,
     body: row.body,
     head: row.headRefName,
-    headRepository: row.headRepository?.nameWithOwner.toLowerCase() ?? null,
+    headRepository: nameWithOwner(row),
     base: row.baseRefName,
     url: row.url,
     draft: row.isDraft,
@@ -151,7 +166,7 @@ export const layer = Layer.effect(
         "view",
         `${pr}`,
         "--json",
-        "number,title,body,headRefName,headRepository,baseRefName,url,isDraft,labels",
+        "number,title,body,headRefName,headRepository,headRepositoryOwner,baseRefName,url,isDraft,labels",
       ];
       return run(args).pipe(
         Effect.catchIf(missingPull, () => Effect.fail(new CodeHostChangeNotFoundError(pr))),

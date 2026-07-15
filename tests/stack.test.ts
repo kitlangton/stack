@@ -1719,6 +1719,37 @@ describe("GitHub", () => {
     );
   });
 
+  it.effect("composes headRepository from headRepositoryOwner on older gh versions", () => {
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: () =>
+          Effect.succeed(
+            JSON.stringify({
+              number: 42,
+              title: "old-gh",
+              body: "body",
+              headRefName: "feature/x",
+              headRepository: { id: "R_kg", name: "Project" },
+              headRepositoryOwner: { id: "MDE", login: "Fork-Owner" },
+              baseRefName: "main",
+              url: "u",
+              isDraft: false,
+              labels: [],
+            }),
+          ),
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const github = yield* CodeHost.Service;
+      const meta = yield* github.change(42);
+      expect(meta.headRepository).toBe("fork-owner/project");
+    }).pipe(
+      Effect.provide(CodeHostGitHub.layer.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc))),
+    );
+  });
+
   it.effect("resolves a created GitHub fork PR by its returned URL", () => {
     const calls: Array<ReadonlyArray<string>> = [];
     const proc = Layer.succeed(

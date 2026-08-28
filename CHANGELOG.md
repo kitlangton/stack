@@ -1,5 +1,14 @@
 # @kitlangton/stack
 
+## 0.4.3
+
+### Patch Changes
+
+- f56b930: Read GitHub PR details through the REST API instead of version-dependent `gh pr view` JSON fields. This fixes decoding failures on older GitHub CLI versions while preserving fork repository identity and handling empty PR bodies and deleted repositories.
+- f56b930: Publish locally ahead stack parents before repairing descendants during sync. Check the actual push destinations, require fast-forward ancestry, and use explicit leases so concurrent remote changes are not overwritten.
+
+  Journal remote-only updates separately so undo can restore different fork/origin tips, including previously absent refs, without discarding existing local parent commits. Keep-going checkpoints retain recovery data from earlier stacks. Journals with remote updates use version 2; existing version 1 journals remain readable.
+
 ## 0.4.2
 
 ### Patch Changes

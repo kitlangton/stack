@@ -7,6 +7,7 @@
 - **Stack block**: The generated markdown block in a change description that shows stack history and the current open path.
 - **Repair**: The workflow that rehomes stack descendants after a squash merge, parent branch deletion, or parent branch rewrite.
 - **Undo journal**: The saved snapshot of branch backups, change target branches, and stack metadata used by `stack undo`.
+- **Remote-only publication**: Publishing an ahead parent without changing its local tip. The undo journal records each destination's before/after tips separately from local branch backups. Journals containing these records use version 2; version 1 journals remain readable.
 - **Code host**: The hosted platform containing pull or merge requests. Currently GitHub (via `gh`) and GitLab (via `glab`). Known public hosts are selected from `origin`; enterprise hosts are configured with `git config stack.codeHost`.
 
 ## Architecture Notes

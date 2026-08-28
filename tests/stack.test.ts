@@ -87,6 +87,8 @@ const gitAndCodeHost = (service: Partial<Git.Interface & CodeHost.Interface>) =>
     remote: () => Effect.succeed(Option.none()),
     switch: () => Effect.void,
     head: () => Effect.succeed(Option.none()),
+    remoteHead: () => Effect.succeed(Option.none()),
+    pushRef: () => Effect.void,
     base: () => Effect.succeed(Option.none()),
     commits: () => Effect.succeed([]),
     novel: (_parent, _branch, commits) => Effect.succeed(commits),
@@ -144,6 +146,7 @@ const stackTestLayer = (opts: {
         changes: () => Effect.succeed(pulls),
         current: () => Effect.succeed(opts.current ?? ""),
         head: (name) => Effect.succeed(Option.fromNullishOr(refsHead(opts.refs, name))),
+        remoteHead: (name) => Effect.succeed(Option.fromNullishOr(refsHead(opts.refs, name))),
         base: (branch, parent) =>
           Effect.succeed(Option.fromNullishOr(opts.bases?.[`${branch}:${parent}`])),
         change: (number) => {
@@ -1685,7 +1688,59 @@ describe("GitHub", () => {
     );
   });
 
-  it.effect("tolerates non-JSON warnings emitted before gh pr view output", () => {
+  it.effect("reads fork identity without depending on gh pr view's version-specific fields", () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) =>
+          Effect.sync(() => {
+            calls.push([tool, ...args]);
+            return JSON.stringify(
+              args[0] === "api"
+                ? {
+                    number: 42,
+                    title: "fork change",
+                    body: null,
+                    head: { ref: "feature", repo: { full_name: "Contributor/Project" } },
+                    base: { ref: "main" },
+                    html_url: "https://github.com/upstream/project/pull/42",
+                    draft: true,
+                    labels: [{ name: "bug" }],
+                  }
+                : {
+                    number: 42,
+                    title: "fork change",
+                    body: "",
+                    headRefName: "feature",
+                    headRepository: { id: "repo-id", name: "Project" },
+                    headRepositoryOwner: { login: "Contributor" },
+                    baseRefName: "main",
+                    url: "https://github.com/upstream/project/pull/42",
+                    isDraft: true,
+                    labels: [{ name: "bug" }],
+                  },
+            );
+          }),
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const github = yield* CodeHost.Service;
+      const meta = yield* github.change(42);
+      expect(meta.headRepository).toBe("contributor/project");
+      expect(meta.head).toBe("feature");
+      expect(meta.base).toBe("main");
+      expect(meta.body).toBe("");
+      expect(meta.draft).toBe(true);
+      expect(meta.labels.map((label) => label.name)).toEqual(["bug"]);
+      expect(calls).toEqual([["gh", "api", "repos/{owner}/{repo}/pulls/42"]]);
+    }).pipe(
+      Effect.provide(CodeHostGitHub.layer.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc))),
+    );
+  });
+
+  it.effect("tolerates non-JSON warnings emitted before GitHub PR detail output", () => {
     const proc = Layer.succeed(
       Proc.Service,
       Proc.Service.of({
@@ -1697,11 +1752,10 @@ describe("GitHub", () => {
                 number: 1,
                 title: "one",
                 body: "body",
-                headRefName: "one",
-                headRepository: { nameWithOwner: "owner/project" },
-                baseRefName: "main",
-                url: "u1",
-                isDraft: false,
+                head: { ref: "one", repo: { full_name: "owner/project" } },
+                base: { ref: "main" },
+                html_url: "u1",
+                draft: false,
                 labels: [],
               }),
             ].join("\n"),
@@ -1714,6 +1768,64 @@ describe("GitHub", () => {
       const meta = yield* github.change(1);
       expect(Number(meta.number)).toBe(1);
       expect(meta.title).toBe("one");
+      expect(meta.body).toBe("body");
+      expect(meta.headRepository).toBe("owner/project");
+    }).pipe(
+      Effect.provide(CodeHostGitHub.layer.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc))),
+    );
+  });
+
+  for (const repo of [null, {}]) {
+    it.effect(
+      `GitHub PR details ${repo === null ? "preserve deleted repositories" : "reject missing repository identity"}`,
+      () => {
+        const proc = Layer.succeed(
+          Proc.Service,
+          Proc.Service.of({
+            exec: () =>
+              Effect.succeed(
+                JSON.stringify({
+                  number: 1,
+                  title: "one",
+                  body: "body",
+                  head: { ref: "one", repo },
+                  base: { ref: "main" },
+                  html_url: "u1",
+                  draft: false,
+                  labels: [],
+                }),
+              ),
+          }),
+        );
+
+        return Effect.gen(function* () {
+          const github = yield* CodeHost.Service;
+          if (repo === null) {
+            expect((yield* github.change(1)).headRepository).toBeNull();
+          } else {
+            expect((yield* Effect.flip(github.change(1)))._tag).toBe("CodeHostDecodeError");
+          }
+        }).pipe(
+          Effect.provide(
+            CodeHostGitHub.layer.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc)),
+          ),
+        );
+      },
+    );
+  }
+
+  it.effect("normalizes missing GitHub PR details", () => {
+    const proc = Layer.succeed(
+      Proc.Service,
+      Proc.Service.of({
+        exec: (_cwd, tool, args) =>
+          Effect.fail(new ExecError(tool, args, 1, "HTTP 404: Not Found")),
+      }),
+    );
+
+    return Effect.gen(function* () {
+      const github = yield* CodeHost.Service;
+      expect((yield* Effect.flip(github.change(1)))._tag).toBe("CodeHostChangeNotFoundError");
     }).pipe(
       Effect.provide(CodeHostGitHub.layer.pipe(Layer.provideMerge(cfg), Layer.provideMerge(proc))),
     );

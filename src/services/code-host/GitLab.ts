@@ -36,16 +36,10 @@ class MRData extends Schema.Class<MRData>("MRData")({
 }) {}
 
 class MRView extends Schema.Class<MRView>("MRView")({
-  iid: Schema.Number,
-  title: Schema.String,
+  ...MRData.fields,
   description: Schema.NullOr(Schema.String),
-  source_branch: Schema.String,
-  target_branch: Schema.String,
-  web_url: Schema.String,
-  draft: Schema.Boolean,
   state: Schema.String,
   labels: Schema.Array(LabelEntry),
-  source_project_id: Schema.NullOr(Schema.Number),
 }) {}
 
 class MRWatch extends Schema.Class<MRWatch>("MRWatch")({
@@ -100,14 +94,9 @@ const ref = (row: MRData, headRepository: string | null) =>
 
 const meta = (row: MRView, headRepository: string | null) =>
   pullMeta({
-    number: row.iid,
+    ...ref(row, headRepository),
     title: row.title,
     body: row.description ?? "",
-    head: row.source_branch,
-    headRepository,
-    base: row.target_branch,
-    url: row.web_url,
-    draft: row.draft,
     state: row.state,
     labels: row.labels.map((item) => new PullLabel({ name: labelName(item) })),
   });

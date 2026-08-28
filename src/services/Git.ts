@@ -92,7 +92,7 @@ export const live = Layer.effect(
       ),
     );
 
-    const worktrees = Effect.fn("Git.worktrees")(function* () {
+    const worktrees = Effect.fn("Git.worktrees")(function* (branch?: string) {
       const out = yield* run("git", ["worktree", "list", "--porcelain", "-z"]);
       const records: Array<{
         path: string;
@@ -127,7 +127,9 @@ export const live = Layer.effect(
       if (current) records.push(current);
 
       return yield* Effect.forEach(
-        records.filter((record) => !record.prunable),
+        records.filter(
+          (record) => !record.prunable && (branch === undefined || record.branch === branch),
+        ),
         (record) =>
           dirtyAt(record.path).pipe(
             Effect.map(
@@ -279,7 +281,7 @@ export const live = Layer.effect(
       parent: string,
       commits: ReadonlyArray<string>,
     ) {
-      const owner = (yield* worktrees()).find((worktree) => worktree.branch === branch) ?? null;
+      const owner = (yield* worktrees(branch))[0] ?? null;
       if (owner && owner.dirty.length > 0) {
         return yield* Effect.fail(checkedOutDirtyError(branch, owner));
       }
@@ -367,9 +369,7 @@ export const live = Layer.effect(
     );
     const release = Effect.fn("Git.release")(function* (branch: string) {
       const owner =
-        (yield* worktrees()).find(
-          (worktree) => worktree.branch === branch && worktree.path !== cfg.root,
-        ) ?? null;
+        (yield* worktrees(branch)).find((worktree) => worktree.path !== cfg.root) ?? null;
       if (!owner) return;
       if (owner.dirty.length > 0) {
         return yield* Effect.fail(releaseDirtyError(branch, owner));
@@ -378,9 +378,7 @@ export const live = Layer.effect(
     });
     const drop = Effect.fn("Git.drop")(function* (branch: string) {
       const owner =
-        (yield* worktrees()).find(
-          (worktree) => worktree.branch === branch && worktree.path !== cfg.root,
-        ) ?? null;
+        (yield* worktrees(branch)).find((worktree) => worktree.path !== cfg.root) ?? null;
       if (owner) {
         return yield* Effect.fail(
           new ExecError(

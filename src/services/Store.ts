@@ -28,14 +28,14 @@ export class Store extends Context.Service<Store, StoreService>()("@stack/Store"
 
       const load = <A>(file: string, miss: () => A, parse: (raw: string) => A) =>
         Effect.gen(function* () {
-          const has = yield* fs
-            .exists(file)
-            .pipe(Effect.mapError((err) => new StateError(file, "exists", String(err))));
-          if (!has) return miss();
-
-          const raw = yield* fs
-            .readFileString(file)
-            .pipe(Effect.mapError((err) => new StateError(file, "read", String(err))));
+          const raw = yield* fs.readFileString(file).pipe(
+            Effect.catchIf(
+              (err) => err.reason._tag === "NotFound",
+              () => Effect.succeed(null),
+            ),
+            Effect.mapError((err) => new StateError(file, "read", String(err))),
+          );
+          if (raw === null) return miss();
 
           return yield* Effect.try({
             try: () => parse(raw),

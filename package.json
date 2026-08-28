@@ -45,7 +45,7 @@
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "lint": "oxlint",
-    "package:smoke": "bun run build && npm pack --dry-run",
+    "package:smoke": "npm pack --dry-run",
     "prepack": "bun run build",
     "release": "bun run package:smoke && npm exec --package @changesets/cli@2.31.0 -- changeset publish",
     "typecheck": "tsc --noEmit",

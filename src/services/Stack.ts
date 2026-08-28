@@ -1467,24 +1467,30 @@ ${note}`;
                 ...new Set(
                   info
                     .filter((item): item is PullMeta => item !== null)
-                    .flatMap((item) => StackBlock.references(item.body)),
+                    .flatMap((item) => StackBlock.untitledReferences(item.body)),
                 ),
-              ];
+              ].filter((number) => !metasByNumber.has(number));
               const completed = yield* Effect.all(
                 numbers.map((number) =>
-                  codeHost
-                    .change(number)
-                    .pipe(
-                      Effect.catchTag("CodeHostChangeNotFoundError", () => Effect.succeed(null)),
+                  codeHost.change(number).pipe(
+                    Effect.catchTag("CodeHostChangeNotFoundError", () => Effect.succeed(null)),
+                    Effect.catch(() =>
+                      Effect.logWarning(
+                        `Could not read the title for ${reference(number)}; keeping the existing stack entry.`,
+                      ).pipe(Effect.as(null)),
                     ),
+                  ),
                 ),
                 { concurrency: cfg.codeHostConcurrency },
               );
-              return new Map(
-                completed
+              return new Map([
+                ...[...metasByNumber.values()].map(
+                  (item) => [Number(item.number), item.title] as const,
+                ),
+                ...completed
                   .filter((item): item is PullMeta => item !== null)
-                  .map((item) => [Number(item.number), item.title]),
-              );
+                  .map((item) => [Number(item.number), item.title] as const),
+              ]);
             });
             const graph = StackGraph.make({
               state,

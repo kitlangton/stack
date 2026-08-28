@@ -126,7 +126,7 @@ export const layer = Layer.effect(
         "--paginate",
         "--slurp",
       ];
-      const out = yield* run(args);
+      const out = yield* run(args).pipe(CodeHost.retryRead);
       const rows = yield* decodePullList(args, out);
       return rows.flatMap((page) => page.map(listRef));
     });
@@ -134,6 +134,7 @@ export const layer = Layer.effect(
     const change = Effect.fn("CodeHost.github.change")((pr: number) => {
       const args = ["api", `repos/{owner}/{repo}/pulls/${pr}`];
       return run(args).pipe(
+        CodeHost.retryRead,
         Effect.catchIf(missingPull, () => Effect.fail(new CodeHostChangeNotFoundError(pr))),
         Effect.flatMap((out) => decodePullDetails(args, out)),
         Effect.map(meta),
@@ -155,7 +156,7 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         for (;;) {
           const args = ["pr", "view", `${pr}`, "--json", "state,mergedAt"];
-          const out = yield* run(args);
+          const out = yield* run(args).pipe(CodeHost.retryRead);
           const row = yield* decodePullWatch(args, out);
 
           if (row.mergedAt) return;

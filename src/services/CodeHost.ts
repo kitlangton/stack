@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import type { CodeHostError, PullMeta, PullRef } from "../domain/model.ts";
+import * as Schedule from "effect/Schedule";
+import type { CodeHostError, ExecError, PullMeta, PullRef } from "../domain/model.ts";
 
 export type Provider = "github" | "gitlab";
 
@@ -42,6 +43,19 @@ export type AdapterProperties = Pick<
 >;
 
 export class Service extends Context.Service<Service, Interface>()("@stack/CodeHost") {}
+
+// Only apply at read call sites: a timed-out write may already have succeeded.
+export const retryRead = <A, R>(read: Effect.Effect<A, ExecError, R>) =>
+  read.pipe(
+    Effect.retry({
+      schedule: Schedule.exponential("1 second").pipe(Schedule.jittered),
+      times: 2,
+      while: (error) =>
+        /\b(?:i\/o timeout|TLS handshake timeout|context deadline exceeded|Client\.Timeout exceeded|connection reset by peer|unexpected EOF)\b|\bHTTP[ :]+(?:502|503|504)\b/i.test(
+          error.stderr,
+        ),
+    }),
+  );
 
 export interface RemoteInfo {
   readonly host: string;

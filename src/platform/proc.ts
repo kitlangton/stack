@@ -47,13 +47,17 @@ export const live = Layer.effect(
             .spawn(cmd)
             .pipe(Effect.mapError((err) => new ExecError(tool, Array.from(args), 1, String(err))));
 
-          const [stdout, stderr, exit] = yield* Effect.all([
-            text(handle.stdout),
-            text(handle.stderr),
-            handle.exitCode.pipe(
-              Effect.mapError((err) => new ExecError(tool, Array.from(args), 1, String(err))),
-            ),
-          ]);
+          // Drain both pipes while waiting for exit so a full pipe cannot block the child.
+          const [stdout, stderr, exit] = yield* Effect.all(
+            [
+              text(handle.stdout),
+              text(handle.stderr),
+              handle.exitCode.pipe(
+                Effect.mapError((err) => new ExecError(tool, Array.from(args), 1, String(err))),
+              ),
+            ],
+            { concurrency: "unbounded" },
+          );
 
           const code = Number(exit);
           if (!ok.includes(code)) {

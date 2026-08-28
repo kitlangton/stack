@@ -269,8 +269,8 @@ export const live = Layer.effect(
         }),
       );
     });
-    const unmergedPaths = Effect.fn("Git.unmergedPaths")(() =>
-      run("git", ["diff", "--name-only", "--diff-filter=U"], [0, 1]).pipe(
+    const unmergedPaths = Effect.fn("Git.unmergedPaths")((root = cfg.root) =>
+      runAt(root, "git", ["diff", "--name-only", "--diff-filter=U"], [0, 1]).pipe(
         Effect.map((out) => out.split("\n").filter(Boolean)),
       ),
     );
@@ -302,14 +302,47 @@ export const live = Layer.effect(
 
       yield* Effect.gen(function* () {
         yield* runAt(root, "git", ["checkout", "-B", temp, parent]).pipe(Effect.asVoid);
-        if (commits.length > 0) {
-          yield* runAt(root, "git", ["cherry-pick", "--empty=drop", ...commits]).pipe(
+        for (const commit of commits) {
+          // A remembered conflict resolution must not look like an empty pick.
+          yield* runAt(root, "git", ["cherry-pick", "--no-rerere-autoupdate", commit]).pipe(
             Effect.asVoid,
             Effect.catchTag("ExecError", (err) =>
               Effect.gen(function* () {
-                const paths = yield* unmergedPaths().pipe(
+                const paths = yield* unmergedPaths(root).pipe(
                   Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)),
                 );
+                // Older Git lacks --empty=drop. Only skip a nonempty commit that
+                // stopped at a clean tree; initially empty commits still fail.
+                const redundant = yield* Effect.gen(function* () {
+                  if (err.code !== 1 || paths.length > 0) return false;
+                  const active = yield* runAt(
+                    root,
+                    "git",
+                    ["rev-parse", "--verify", "--quiet", "CHERRY_PICK_HEAD"],
+                    [0, 1],
+                  );
+                  if (active !== commit) return false;
+                  const dirty = yield* runAt(root, "git", [
+                    "status",
+                    "--porcelain=v1",
+                    "--untracked-files=no",
+                    "--ignore-submodules=none",
+                  ]);
+                  if (dirty) return false;
+                  const changes = yield* runAt(root, "git", [
+                    "diff-tree",
+                    "--root",
+                    "--no-commit-id",
+                    "--name-only",
+                    "--ignore-submodules=none",
+                    "-r",
+                    commit,
+                  ]);
+                  return changes.length > 0;
+                }).pipe(Effect.catch(() => Effect.succeed(false)));
+                if (redundant) {
+                  return yield* runAt(root, "git", ["cherry-pick", "--skip"]).pipe(Effect.asVoid);
+                }
                 return yield* Effect.fail(
                   new ReplayConflictError(branch, parent, paths, err.stderr),
                 );

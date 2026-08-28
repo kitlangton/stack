@@ -83,6 +83,11 @@ it refuses to overwrite a remote tip changed since sync.
 GitHub stack blocks use compact `#101` references. GitLab blocks use `!101`
 references plus titles because bare GitLab MR links only show titles on hover.
 
+Recognized transient code-host read failures are retried up to twice, with
+jittered backoff around one and two seconds. Writes are not automatically retried:
+a timed-out create, merge, or update may already have succeeded. GitLab reuses
+known titles and preserves historical stack entries if optional title lookup fails.
+
 If a repair fails, run:
 
 ```bash

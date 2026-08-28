@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Fiber, Layer, Option, Ref } from "effect";
+import { Cause, Effect, Exit, Fiber, Layer, Option, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -3383,6 +3383,105 @@ describe("Stack", () => {
       expect(body).not.toContain("#3");
     }).pipe(Effect.provide(test.layer));
   });
+
+  it.effect("GitLab links reuse known titles without rereading live or titled history", () => {
+    const pull = pr(1, "topic", "dev");
+    const body =
+      "<!-- stack:links:start -->\n### Stack\n\n1. !2 - Fix #99\n2. **!1**\n<!-- stack:links:end -->";
+    const calls: Array<number> = [];
+    const layer = stackTestLayer({
+      refs: [ref("dev"), ref("topic")],
+      pulls: [pull],
+      state: stackState([stackLink({ branch: "topic", parent: "dev", anchor: "dev", pr: 1 })]),
+      service: {
+        provider: "gitlab",
+        reference: (number) => `!${number}`,
+        change: (number) =>
+          Effect.gen(function* () {
+            calls.push(number);
+            if (calls.length > 1)
+              return yield* Effect.fail(new ExecError("glab", ["mr", "view"], 1, "i/o timeout"));
+            return metaFor(pull, body);
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.links(false);
+      expect(calls).toEqual([1]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("GitLab links preserve history when optional title enrichment times out", () => {
+    const pull = pr(1, "topic", "dev");
+    const body =
+      "<!-- stack:links:start -->\n### Stack\n\n1. !2\n2. **!1 - topic**\n<!-- stack:links:end -->";
+    const bodies: Array<string> = [];
+    const layer = stackTestLayer({
+      refs: [ref("dev"), ref("topic")],
+      pulls: [pull],
+      state: stackState([stackLink({ branch: "topic", parent: "dev", anchor: "dev", pr: 1 })]),
+      service: {
+        provider: "gitlab",
+        reference: (number) => `!${number}`,
+        change: (number) =>
+          number === 1
+            ? Effect.succeed(metaFor(pull, body))
+            : Effect.fail(new ExecError("glab", ["mr", "view"], 1, "i/o timeout")),
+        body: (_number, value) => Effect.sync(() => void bodies.push(value)),
+      },
+    });
+    return Effect.gen(function* () {
+      const stack = yield* Stack;
+      yield* stack.links(true);
+      expect(bodies[0]).toContain("1. !2\n");
+      expect(bodies[0]).toContain("!1 - topic");
+    }).pipe(Effect.provide(layer));
+  });
+
+  for (const optional of [false, true]) {
+    it.effect(
+      optional
+        ? "optional GitLab title interruption prevents body updates"
+        : "mandatory GitLab metadata failure prevents body updates",
+      () => {
+        const pull = pr(1, "topic", "dev");
+        const body =
+          "<!-- stack:links:start -->\n### Stack\n\n1. !2\n2. !1\n<!-- stack:links:end -->";
+        const error = new ExecError("glab", ["mr", "view"], 1, "i/o timeout");
+        let writes = 0;
+        const layer = stackTestLayer({
+          refs: [ref("dev"), ref("topic")],
+          pulls: [pull],
+          state: stackState([stackLink({ branch: "topic", parent: "dev", anchor: "dev", pr: 1 })]),
+          service: {
+            provider: "gitlab",
+            reference: (number) => `!${number}`,
+            change: (number) =>
+              optional
+                ? number === 1
+                  ? Effect.succeed(metaFor(pull, body))
+                  : Effect.interrupt
+                : Effect.fail(error),
+            body: () =>
+              Effect.sync(() => {
+                writes += 1;
+              }),
+          },
+        });
+        return Effect.gen(function* () {
+          const stack = yield* Stack;
+          if (optional) {
+            const exit = yield* Effect.exit(stack.links(true));
+            expect(Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause)).toBe(true);
+          } else {
+            expect(yield* Effect.flip(stack.links(true))).toBe(error);
+          }
+          expect(writes).toBe(0);
+        }).pipe(Effect.provide(layer));
+      },
+    );
+  }
 
   it.effect("links render the current path through a forked stack", () => {
     const bodies = new Map<number, string>();

@@ -1,5 +1,7 @@
 import * as Cache from "effect/Cache";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import {
@@ -135,15 +137,18 @@ export const layer = Layer.effect(
       return yield* proc.exec(cfg.root, "glab", args, ok);
     });
 
-    const repositories = yield* Cache.make({
-      capacity: 256,
-      lookup: Effect.fn("CodeHost.gitlab.sourceRepository.lookup")(function* (id: number) {
+    const repositories = yield* Cache.makeWith(
+      Effect.fn("CodeHost.gitlab.sourceRepository.lookup")(function* (id: number) {
         const args = ["api", `projects/${id}`];
-        const out = yield* run(args);
+        const out = yield* run(args).pipe(CodeHost.retryRead);
         const project = yield* decodeProjectData(args, out);
         return project.path_with_namespace;
       }),
-    });
+      {
+        capacity: 256,
+        timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero),
+      },
+    );
 
     const sourceRepository = Effect.fn("CodeHost.gitlab.sourceRepository")(function* (
       id: number | null,
@@ -159,7 +164,7 @@ export const layer = Layer.effect(
         "--output",
         "ndjson",
       ];
-      const out = yield* run(args);
+      const out = yield* run(args).pipe(CodeHost.retryRead);
       const rows = yield* decodeMRList(args, out);
       return yield* Effect.forEach(
         rows,
@@ -171,6 +176,7 @@ export const layer = Layer.effect(
     const change = Effect.fn("CodeHost.gitlab.change")((pr: number) => {
       const args = ["mr", "view", `${pr}`, "-F", "json"];
       return run(args).pipe(
+        CodeHost.retryRead,
         Effect.catchIf(missingPull, () => Effect.fail(new CodeHostChangeNotFoundError(pr))),
         Effect.flatMap((out) => decodeMRView(args, out)),
         Effect.flatMap((row) =>
@@ -206,7 +212,7 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         for (;;) {
           const args = ["mr", "view", `${pr}`, "-F", "json"];
-          const out = yield* run(args);
+          const out = yield* run(args).pipe(CodeHost.retryRead);
           const row = yield* decodeMRWatch(args, out);
 
           if (row.merged_at || row.state === "merged") return;

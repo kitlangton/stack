@@ -67,12 +67,14 @@ const completedLines = (
     });
 };
 
-export const references = (body: string) => {
+export const untitledReferences = (body: string) => {
   const prior = body.match(new RegExp(`${start}([\\s\\S]*?)${end}`))?.[1];
   if (!prior) return [];
-  return [...new Set([...prior.matchAll(/[#!](\d+)/g)].map((match) => Number(match[1])))]
-    .filter((number) => Number.isInteger(number))
-    .sort((a, b) => a - b);
+  const numbers = prior.split("\n").flatMap((line) => {
+    const entry = line.match(/^\s*(?:\d+\.|- \[[ x]\])\s+(?:\*\*)?[#!](\d+)(.*)$/);
+    return entry && !/\s+-\s+\S/.test(entry[2] ?? "") ? [Number(entry[1])] : [];
+  });
+  return [...new Set(numbers)].filter((number) => Number.isInteger(number)).sort((a, b) => a - b);
 };
 
 export const render = (opts: {

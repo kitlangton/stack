@@ -15,6 +15,7 @@ import {
   PullMeta,
   pullRef,
   PullRef,
+  type RemoteUpdate,
   stackLink,
   StackLink,
   StackOperationError,
@@ -319,7 +320,7 @@ ${note}`;
         if (backups > 0 && opts.mode === "apply") summary.push(`Backups created: ${backups}`);
         if (summary.length > 0) lines.push("", ...summary);
         if (opts.mode === "dry-run") lines.push("", "Apply:", "  stack sync --apply");
-        else if (!opts.failed && (backups > 0 || updatedPrs.size > 0)) {
+        else if (!opts.failed && (backups > 0 || updatedPrs.size > 0 || pushed.size > 0)) {
           lines.push("", "Undo:", "  stack undo --apply");
         }
         return lines;
@@ -705,6 +706,11 @@ ${note}`;
               state: ReturnType<typeof stackState>,
             ) => Effect.Effect<void, StackError>;
             readonly preserveUndo?: boolean;
+            readonly publishParents?: boolean;
+            readonly childBases?: ReadonlySet<string>;
+            readonly writeUndo?: (
+              run: ReturnType<typeof undoState>,
+            ) => Effect.Effect<void, StackError>;
           },
         ) =>
           Effect.gen(function* () {
@@ -743,12 +749,13 @@ ${note}`;
                 ),
               );
             }
-            const childBases = new Set(pulls.map((pull) => String(pull.base)));
+            const childBases = opts.childBases ?? new Set(pulls.map((pull) => String(pull.base)));
             let remoteByRepository: Map<string, string> | null = null;
             const tips = new Map<string, string | null>();
             const prior = new Map<string, string>();
             const moved = new Set<string>();
             const entries: Array<UndoEntry> = Array.from(opts.initialEntries ?? []);
+            const remoteUpdates: Array<RemoteUpdate> = [];
             const next: Array<StackLink> = [];
             let journal = apply && (initialActions.length > 0 || entries.length > 0);
 
@@ -806,7 +813,7 @@ ${note}`;
 
             const checkpoint = Effect.fn("Stack.repairStack.checkpoint")(() =>
               apply
-                ? store.writeUndo(
+                ? (opts.writeUndo ?? store.writeUndo)(
                     undoState(
                       stamp,
                       journalState,
@@ -816,6 +823,7 @@ ${note}`;
                         reference,
                         requestLabel,
                       ),
+                      remoteUpdates,
                     ),
                   )
                 : Effect.void,
@@ -877,7 +885,8 @@ ${note}`;
             for (const link of [...state.links].sort(
               (a, b) => graph.rank(String(a.branch)) - graph.rank(String(b.branch)),
             )) {
-              if (!live.has(String(link.branch))) {
+              const local = live.get(String(link.branch));
+              if (!local) {
                 if (!prs.has(String(link.branch))) continue;
                 next.push(link);
                 continue;
@@ -998,6 +1007,55 @@ ${note}`;
                 }
 
                 moved.add(link.branch);
+              }
+
+              if (opts.publishParents && !drift && childBases.has(String(link.branch))) {
+                if (trunk(link.branch)) {
+                  return yield* new StackOperationError(
+                    `cannot publish trunk branch: ${link.branch}`,
+                  );
+                }
+                const after = local.head;
+                const updates: Array<RemoteUpdate> = [];
+                for (const remote of yield* pushRemotes(String(link.branch), headRepository, num)) {
+                  const before = Option.getOrNull(yield* git.remoteHead(link.branch, remote));
+                  if (before === after) continue;
+                  if (before !== null) {
+                    const known = yield* git.head(`${before}^{commit}`);
+                    const common = Option.isSome(known)
+                      ? yield* git.base(after, before)
+                      : Option.none<string>();
+                    if (Option.isNone(common) || common.value !== before) {
+                      return yield* new StackOperationError(
+                        `cannot publish ${link.branch} to ${remote}: remote tip is not an ancestor of the local tip; fetch and reconcile it first`,
+                      );
+                    }
+                  }
+                  updates.push({ branch: link.branch, remote, before, after });
+                }
+                if (updates.length > 0) {
+                  actions.push({
+                    _tag: "Push",
+                    mode,
+                    branch: String(link.branch),
+                    remotes: updates.map((update) => update.remote),
+                  });
+                  if (apply) {
+                    // A checkpoint may precede only some pushes; undo also accepts the before tip.
+                    remoteUpdates.push(...updates);
+                    journal = true;
+                    yield* checkpoint();
+                    for (const update of updates) {
+                      yield* step(`push ${update.branch} to ${update.remote}`);
+                      yield* git.pushRef({
+                        branch: update.branch,
+                        remote: update.remote,
+                        head: update.after,
+                        expected: update.before,
+                      });
+                    }
+                  }
+                }
               }
 
               const now = prs.get(link.branch) ?? null;
@@ -1146,6 +1204,7 @@ ${note}`;
                     journalState,
                     entries,
                     StackResult.renderAll([...journalActions, ...actions], reference, requestLabel),
+                    remoteUpdates,
                   )
                 : null,
               lines:
@@ -1209,11 +1268,13 @@ ${note}`;
               : yield* resolveScope(current, false);
 
             const initialActions = [...reconciled.actions, ...plan.map(StackResult.track)];
+            const childBases = new Set(pulls.map((pull) => String(pull.base)));
 
             const syncScoped = Effect.fn("Stack.sync.scoped")(
               (
                 target: { readonly root: string; readonly branches: ReadonlySet<string> } | null,
                 preserveUndo = false,
+                writeUndo?: (run: ReturnType<typeof undoState>) => Effect.Effect<void, StackError>,
               ) =>
                 Effect.gen(function* () {
                   const scoped = target ? filterState(planned, target.branches) : planned;
@@ -1236,6 +1297,9 @@ ${note}`;
                     initialActions: scopedInitial,
                     ...(writeState ? { writeState } : {}),
                     preserveUndo,
+                    publishParents: true,
+                    childBases,
+                    ...(writeUndo ? { writeUndo } : {}),
                   });
                   const changedOpenPulls = repair.actions.some(
                     (action) => action._tag === "RetargetPull" || action._tag === "CreatePull",
@@ -1278,6 +1342,7 @@ ${note}`;
             const failed = new Array<{ root: string; error: string }>();
             const sections = new Array<string>();
             const aggregateEntries = new Array<UndoEntry>();
+            const aggregateRemoteUpdates = new Array<RemoteUpdate>();
             const aggregateActions = new Array<string>();
             let aggregateAt: string | null = null;
 
@@ -1286,11 +1351,26 @@ ${note}`;
               aggregateAt ??= String(run.at);
               aggregateEntries.push(...run.entries);
               aggregateActions.push(...run.actions);
+              aggregateRemoteUpdates.push(...(run.remoteUpdates ?? []));
             };
 
             for (const root of roots) {
+              let checkpointed: ReturnType<typeof undoState> | null = null;
               const result = yield* Effect.result(
-                syncScoped({ root, branches: scopedBranches(planned, root) }, true),
+                syncScoped({ root, branches: scopedBranches(planned, root) }, true, (run) =>
+                  Effect.gen(function* () {
+                    yield* store.writeUndo(
+                      undoState(
+                        aggregateAt ?? run.at,
+                        state,
+                        [...aggregateEntries, ...run.entries],
+                        [...aggregateActions, ...run.actions],
+                        [...aggregateRemoteUpdates, ...(run.remoteUpdates ?? [])],
+                      ),
+                    );
+                    checkpointed = run;
+                  }),
+                ),
               );
               if (Result.isSuccess(result)) {
                 succeeded.push(root);
@@ -1298,13 +1378,19 @@ ${note}`;
                 rememberUndo(result.success.undo);
                 sections.push(...result.success.lines);
               } else {
-                rememberUndo(yield* store.readUndo());
+                rememberUndo(checkpointed);
                 failed.push({ root, error: String(result.failure) });
               }
 
-              if (!dryRun && aggregateAt && aggregateEntries.length > 0) {
+              if (!dryRun && aggregateAt && Result.isSuccess(result) && result.success.undo) {
                 yield* store.writeUndo(
-                  undoState(aggregateAt, state, aggregateEntries, aggregateActions),
+                  undoState(
+                    aggregateAt,
+                    state,
+                    aggregateEntries,
+                    aggregateActions,
+                    aggregateRemoteUpdates,
+                  ),
                 );
               }
             }
@@ -1897,6 +1983,23 @@ ${note}`;
             run.entries.flatMap((item) => (item.backup ? [String(item.branch)] : [])),
           );
 
+          const remoteUpdates: Array<RemoteUpdate> = [];
+          for (const update of run.remoteUpdates ?? []) {
+            if (trunks.has(update.branch)) {
+              return yield* new StackOperationError(
+                `cannot restore trunk branch: ${update.branch}`,
+              );
+            }
+            const current = Option.getOrNull(yield* git.remoteHead(update.branch, update.remote));
+            if (current === update.before) continue;
+            if (current !== update.after) {
+              return yield* new StackOperationError(
+                `cannot undo ${update.remote}/${update.branch}: remote tip changed since sync; refusing to overwrite it`,
+              );
+            }
+            remoteUpdates.push(update);
+          }
+
           if (restore.has(current)) {
             actions.push(`${mode}switch to ${trunk}`);
             if (apply) yield* git.switch(trunk);
@@ -1917,6 +2020,20 @@ ${note}`;
             if (apply) {
               yield* git.restore(item.branch, item.backup);
               for (const remote of remotes) yield* git.push(item.branch, remote);
+            }
+          }
+
+          for (const update of remoteUpdates) {
+            actions.push(
+              `${mode}${update.before === null ? "delete" : "restore"} remote ${update.remote}/${update.branch}`,
+            );
+            if (apply) {
+              yield* git.pushRef({
+                branch: update.branch,
+                remote: update.remote,
+                head: update.before,
+                expected: update.after,
+              });
             }
           }
 

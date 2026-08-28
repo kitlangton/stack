@@ -81,12 +81,21 @@ export class UndoEntry extends Schema.Class<UndoEntry>("UndoEntry")({
   pushRemotes: Schema.optional(Schema.Array(Schema.String)),
 }) {}
 
+export const RemoteUpdate = Schema.Struct({
+  branch: BranchName,
+  remote: Schema.String,
+  before: Schema.NullOr(Schema.String),
+  after: Schema.String,
+});
+export interface RemoteUpdate extends Schema.Schema.Type<typeof RemoteUpdate> {}
+
 export class UndoState extends Schema.Class<UndoState>("UndoState")({
-  version: Schema.Literal(version),
+  version: Schema.Union([Schema.Literal(1), Schema.Literal(2)]),
   at: Schema.String,
   state: StackState,
   entries: Schema.Array(UndoEntry),
   actions: Schema.Array(Schema.String),
+  remoteUpdates: Schema.optionalKey(Schema.Array(RemoteUpdate)),
 }) {}
 
 export class StatusNode extends Schema.Class<StatusNode>("StatusNode")({
@@ -397,11 +406,13 @@ export const undoState = (
   state: StackState,
   entries: ReadonlyArray<UndoEntry>,
   actions: ReadonlyArray<string>,
+  remoteUpdates: ReadonlyArray<RemoteUpdate> = [],
 ) =>
   new UndoState({
-    version,
+    version: remoteUpdates.length > 0 ? 2 : version,
     at,
     state,
     entries: Array.from(entries),
     actions: Array.from(actions),
+    ...(remoteUpdates.length > 0 ? { remoteUpdates: Array.from(remoteUpdates) } : {}),
   });

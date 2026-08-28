@@ -14,6 +14,13 @@ export interface Worktree {
   readonly dirty: ReadonlyArray<string>;
 }
 
+export interface PushRef {
+  readonly branch: string;
+  readonly remote: string;
+  readonly head: string | null;
+  readonly expected: string | null;
+}
+
 export interface Interface {
   readonly dirty: () => Effect.Effect<ReadonlyArray<string>, ExecError>;
   readonly worktrees: () => Effect.Effect<ReadonlyArray<Worktree>, ExecError>;
@@ -27,6 +34,10 @@ export interface Interface {
   readonly remote: () => Effect.Effect<Option.Option<string>, ExecError>;
   readonly switch: (branch: string) => Effect.Effect<void, ExecError>;
   readonly head: (name: string) => Effect.Effect<Option.Option<string>, ExecError>;
+  readonly remoteHead: (
+    branch: string,
+    remote: string,
+  ) => Effect.Effect<Option.Option<string>, ExecError>;
   readonly base: (
     branch: string,
     parent: string,
@@ -51,6 +62,7 @@ export interface Interface {
   readonly drop: (branch: string) => Effect.Effect<void, ExecError>;
   readonly restore: (branch: string, name: string) => Effect.Effect<void, ExecError>;
   readonly push: (branch: string, remote?: string) => Effect.Effect<void, ExecError>;
+  readonly pushRef: (update: PushRef) => Effect.Effect<void, ExecError>;
 }
 
 export class Service extends Context.Service<Service, Interface>()("@stack/Git") {}
@@ -201,10 +213,31 @@ export const live = Layer.effect(
       ),
     );
     const head = Effect.fn("Git.head")((name: string) =>
-      run("git", ["rev-parse", "--verify", name], [0, 1]).pipe(
+      run("git", ["rev-parse", "--verify", "--quiet", name], [0, 1]).pipe(
         Effect.map((out) => (out ? Option.some(out) : Option.none<string>())),
       ),
     );
+    const pushUrl = Effect.fn("Git.pushUrl")(function* (remote: string) {
+      const args = ["remote", "get-url", "--push", "--all", remote];
+      const urls = (yield* run("git", args)).split("\n").filter(Boolean);
+      const url = urls[0];
+      if (urls.length !== 1 || !url) {
+        return yield* Effect.fail(
+          new ExecError("git", args, 1, `${remote} must have exactly one push URL.`),
+        );
+      }
+      return url;
+    });
+    const remoteHead = Effect.fn("Git.remoteHead")(function* (branch: string, remote: string) {
+      const url = yield* pushUrl(remote);
+      const ref = `refs/heads/${branch}`;
+      const out = yield* run("git", ["ls-remote", "--heads", "--", url, ref]);
+      const head = out
+        .split("\n")
+        .map((line) => line.split("\t"))
+        .find((row) => row[1] === ref)?.[0];
+      return Option.fromNullishOr(head);
+    });
     const base = Effect.fn("Git.base")(function* (branch: string, parent: string) {
       const out = yield* run("git", ["merge-base", branch, parent], [0, 1]);
       return out ? Option.some(out) : Option.none<string>();
@@ -338,6 +371,23 @@ export const live = Layer.effect(
             Effect.asVoid,
           ),
     );
+    const pushRef = Effect.fn("Git.pushRef")(function* ({
+      branch,
+      remote,
+      head,
+      expected,
+    }: PushRef) {
+      const url = yield* pushUrl(remote);
+      const ref = `refs/heads/${branch}`;
+      yield* run("git", [
+        "push",
+        "--no-follow-tags",
+        `--force-with-lease=${ref}:${expected ?? ""}`,
+        "--",
+        url,
+        `${head ?? ""}:${ref}`,
+      ]);
+    });
     return Service.of({
       fetch,
       remotes,
@@ -348,6 +398,7 @@ export const live = Layer.effect(
       remote,
       switch: switch_,
       head,
+      remoteHead,
       base,
       commits,
       novel,
@@ -358,6 +409,7 @@ export const live = Layer.effect(
       drop,
       restore,
       push,
+      pushRef,
     });
   }),
 );
@@ -388,6 +440,8 @@ export const test = (opts: {
                 : undefined),
           ),
         ),
+      remoteHead: (branch) =>
+        Effect.succeed(Option.fromNullishOr(opts.refs?.find((ref) => ref.name === branch)?.head)),
       base: (branch: string, parent: string) =>
         Effect.succeed(Option.fromNullishOr(opts.bases?.[`${branch}:${parent}`])),
       commits: () => Effect.succeed([]),
@@ -399,6 +453,7 @@ export const test = (opts: {
       drop: () => Effect.void,
       restore: () => Effect.void,
       push: () => Effect.void,
+      pushRef: () => Effect.void,
     }),
   );
 

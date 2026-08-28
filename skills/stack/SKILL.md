@@ -55,6 +55,13 @@ stack sync --apply      # record links, repair, retarget, refresh stack blocks
 That's the common loop. `stack sync` previews; `stack sync --apply` does the
 work. Repeat after any parent branch changes or a squash merge lands.
 
+Sync also publishes locally ahead parent branches before repairing descendants.
+For parents that need no local repair, it checks the actual push destinations and
+only publishes fast-forward changes with explicit leases. Fetch and reconcile
+diverged or unknown remote tips before retrying. Undo restores remote-only
+publication without rolling back commits that already existed on the local parent,
+and refuses to overwrite unexpected remote changes.
+
 ## Commands
 
 - `stack status` — show the current stack graph (hides backups, includes open

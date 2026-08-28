@@ -68,10 +68,17 @@ then repair descendants automatically after the root lands.
 
 - Infers stack links from PR/MR target branches.
 - Records stack intent in `.git/stack/state.json`.
+- Publishes ahead parent branches before repairing their descendants.
 - Repairs descendants after parent branches move or land.
 - Retargets PRs/MRs when needed.
 - Refreshes stack blocks in descriptions.
 - Saves `.git/stack/undo.json` before mutations.
+
+For a parent that needs no local repair, sync checks its actual push destinations
+and only publishes fast-forward changes, with explicit leases. Diverged or unknown
+remote tips require fetching and reconciling first. Undo restores each destination's
+previous tip without discarding commits that were already on the local parent;
+it refuses to overwrite a remote tip changed since sync.
 
 GitHub stack blocks use compact `#101` references. GitLab blocks use `!101`
 references plus titles because bare GitLab MR links only show titles on hover.

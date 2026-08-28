@@ -16,22 +16,6 @@ import { StackConfig } from "../Config.ts";
 import { CodeHost } from "../CodeHost.ts";
 import { CodeHostMemory } from "./Memory.ts";
 
-class PullView extends Schema.Class<PullView>("PullView")({
-  number: Schema.Number,
-  title: Schema.String,
-  body: Schema.String,
-  headRefName: Schema.String,
-  headRepository: Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String })),
-  baseRefName: Schema.String,
-  url: Schema.String,
-  isDraft: Schema.Boolean,
-  labels: Schema.Array(
-    Schema.Struct({
-      name: Schema.String,
-    }),
-  ),
-}) {}
-
 class PullWatch extends Schema.Class<PullWatch>("PullWatch")({
   state: Schema.String,
   mergedAt: Schema.NullOr(Schema.String),
@@ -51,6 +35,13 @@ class PullListData extends Schema.Class<PullListData>("PullListData")({
 
 const PullListJson = Schema.Array(Schema.Array(PullListData));
 
+const PullDetails = Schema.Struct({
+  ...PullListData.fields,
+  body: Schema.NullOr(Schema.String),
+  labels: Schema.Array(Schema.Struct({ name: Schema.String })),
+});
+interface PullDetails extends Schema.Schema.Type<typeof PullDetails> {}
+
 const extractJson = (out: string): string => {
   const start = out.search(/[[{]/);
   if (start === -1) return out;
@@ -67,9 +58,9 @@ const decodePullList = (args: ReadonlyArray<string>, out: string) =>
     catch: (err) => new CodeHostDecodeError("gh", args, out, String(err)),
   });
 
-const decodePullView = (args: ReadonlyArray<string>, out: string) =>
+const decodePullDetails = (args: ReadonlyArray<string>, out: string) =>
   Effect.try({
-    try: () => Schema.decodeUnknownSync(PullView)(JSON.parse(extractJson(out))),
+    try: () => Schema.decodeUnknownSync(PullDetails)(JSON.parse(extractJson(out))),
     catch: (err) => new CodeHostDecodeError("gh", args, out, String(err)),
   });
 
@@ -93,16 +84,11 @@ const listRef = (row: PullListData) =>
     draft: row.draft,
   });
 
-const meta = (row: PullView) =>
+const meta = (row: PullDetails) =>
   pullMeta({
-    number: row.number,
+    ...listRef(row),
     title: row.title,
-    body: row.body,
-    head: row.headRefName,
-    headRepository: row.headRepository?.nameWithOwner.toLowerCase() ?? null,
-    base: row.baseRefName,
-    url: row.url,
-    draft: row.isDraft,
+    body: row.body ?? "",
     state: "OPEN",
     labels: row.labels.map((item) => new PullLabel({ name: item.name })),
   });
@@ -146,16 +132,10 @@ export const layer = Layer.effect(
     });
 
     const change = Effect.fn("CodeHost.github.change")((pr: number) => {
-      const args = [
-        "pr",
-        "view",
-        `${pr}`,
-        "--json",
-        "number,title,body,headRefName,headRepository,baseRefName,url,isDraft,labels",
-      ];
+      const args = ["api", `repos/{owner}/{repo}/pulls/${pr}`];
       return run(args).pipe(
         Effect.catchIf(missingPull, () => Effect.fail(new CodeHostChangeNotFoundError(pr))),
-        Effect.flatMap((out) => decodePullView(args, out)),
+        Effect.flatMap((out) => decodePullDetails(args, out)),
         Effect.map(meta),
       );
     });

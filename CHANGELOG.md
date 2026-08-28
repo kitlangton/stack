@@ -1,5 +1,11 @@
 # @kitlangton/stack
 
+## 0.4.6
+
+### Patch Changes
+
+- ac7f9ce: Allow `stack skill` to print instructions outside a Git repository. Avoid scanning unrelated worktree contents during branch-specific Git operations, read state files without a separate existence check, and read independent local status information concurrently. Preserve dirty-worktree preflight and undo checkpoint behavior while simplifying internal bookkeeping and shared GitLab model handling.
+
 ## 0.4.5
 
 ### Patch Changes

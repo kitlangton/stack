@@ -420,12 +420,10 @@ ${note}`;
 
       const status: StackService["status"] = Effect.fn("Stack.status")(() =>
         Effect.gen(function* () {
-          const [state, refs, current, remote] = yield* Effect.all([
-            store.read(),
-            git.refs(),
-            git.current(),
-            git.remote(),
-          ]);
+          const [state, refs, current, remote] = yield* Effect.all(
+            [store.read(), git.refs(), git.current(), git.remote()],
+            { concurrency: 4 },
+          );
           const pulls = yield* codeHost.changes().pipe(
             Effect.catchTags({
               ExecError: () => Effect.succeed([]),
@@ -698,7 +696,6 @@ ${note}`;
             readonly apply: boolean;
             readonly saved?: Map<string, string>;
             readonly journalState?: ReturnType<typeof stackState>;
-            readonly initialEntries?: ReadonlyArray<UndoEntry>;
             readonly journalActions?: ReadonlyArray<StackResult.StackResultItem>;
             readonly initialActions?: ReadonlyArray<StackResult.StackResultItem>;
             readonly replayAnchors?: ReadonlyMap<string, string>;
@@ -754,10 +751,10 @@ ${note}`;
             const tips = new Map<string, string | null>();
             const prior = new Map<string, string>();
             const moved = new Set<string>();
-            const entries: Array<UndoEntry> = Array.from(opts.initialEntries ?? []);
+            const entries: Array<UndoEntry> = [];
             const remoteUpdates: Array<RemoteUpdate> = [];
             const next: Array<StackLink> = [];
-            let journal = apply && (initialActions.length > 0 || entries.length > 0);
+            let journal = apply && initialActions.length > 0;
 
             const headRemote = Effect.fn("Stack.repairStack.headRemote")(function* (
               headRepository: string | null,
@@ -846,7 +843,6 @@ ${note}`;
             const plannedRepairBranches = Effect.fn("Stack.repairStack.plannedRepairBranches")(
               function* () {
                 const branches = new Set<string>();
-                const plannedMoved = new Set<string>();
                 const plannedTips = new Map<string, string | null>();
 
                 for (const link of [...state.links].sort(
@@ -867,12 +863,11 @@ ${note}`;
                   const drift =
                     replayAnchors.has(String(link.branch)) ||
                     parent !== link.parent ||
-                    plannedMoved.has(parent) ||
+                    branches.has(parent) ||
                     (want && (Option.isNone(have) || have.value !== want));
 
                   if (drift) {
                     branches.add(String(link.branch));
-                    plannedMoved.add(String(link.branch));
                   }
                 }
 
@@ -929,8 +924,6 @@ ${note}`;
                 (!apply && moved.has(parent)) ||
                 (want && (Option.isNone(have) || have.value !== want));
               const base = pr?.base ?? null;
-              let backup: string | null = null;
-              let created: number | null = null;
               let num = pr?.number ?? link.pr;
               const previous =
                 apply && !pr && link.pr
@@ -963,7 +956,7 @@ ${note}`;
                       return yield* git.novel(onto, link.branch, commits);
                     })
                   : Array<string>();
-                backup = `backup/stack-sync-${stamp}-${link.branch}`;
+                const backup = `backup/stack-sync-${stamp}-${link.branch}`;
                 const rebase = {
                   branch: String(link.branch),
                   parent,
@@ -1073,7 +1066,7 @@ ${note}`;
                         backup: null,
                         pr: now.number,
                         base,
-                        created,
+                        created: null,
                       }),
                     );
                     journal = true;
@@ -1102,18 +1095,17 @@ ${note}`;
               const open = prs.get(link.branch) ?? null;
               if (!open) {
                 if (apply) {
-                  const prev = previous;
-                  const nextPr = draft(link, parent, prev);
-                  if (!entries.some((item) => item.branch === link.branch)) {
-                    entries.push(
-                      undoEntry({
-                        branch: link.branch,
-                        backup: null,
-                        pr: now?.number ?? link.pr ?? null,
-                        base,
-                        created: null,
-                      }),
-                    );
+                  const nextPr = draft(link, parent, previous);
+                  let entry = entries.find((item) => item.branch === link.branch);
+                  if (!entry) {
+                    entry = undoEntry({
+                      branch: link.branch,
+                      backup: null,
+                      pr: now?.number ?? link.pr ?? null,
+                      base,
+                      created: null,
+                    });
+                    entries.push(entry);
                     journal = true;
                   }
                   yield* step(`create ${requestLabel} for ${link.branch} -> ${parent}`);
@@ -1126,7 +1118,6 @@ ${note}`;
                     nextPr.labels,
                     headRepository,
                   );
-                  created = made.number;
                   num = made.number;
                   prs.set(link.branch, made);
                   const createdPull = {
@@ -1135,27 +1126,14 @@ ${note}`;
                     pr: Number(made.number),
                   } satisfies RepairPlan.CreatePullPlan;
                   actions.push(RepairPlan.createPull(createdPull, mode));
-                  const i = entries.findIndex((item) => item.branch === link.branch);
-                  if (i >= 0) {
-                    entries[i] = undoEntry({
-                      branch: entries[i]!.branch,
-                      backup: entries[i]!.backup,
-                      pr: entries[i]!.pr,
-                      base: entries[i]!.base,
-                      created: made.number,
-                      ...(entries[i]!.pushRemotes ? { pushRemotes: entries[i]!.pushRemotes } : {}),
-                    });
-                  } else {
-                    entries.push(
-                      undoEntry({
-                        branch: link.branch,
-                        backup: null,
-                        pr: now?.number ?? link.pr ?? null,
-                        base,
-                        created: made.number,
-                      }),
-                    );
-                  }
+                  entries[entries.indexOf(entry)] = undoEntry({
+                    branch: entry.branch,
+                    backup: entry.backup,
+                    pr: entry.pr,
+                    base: entry.base,
+                    created: made.number,
+                    ...(entry.pushRemotes ? { pushRemotes: entry.pushRemotes } : {}),
+                  });
                   journal = true;
                   yield* checkpoint();
                 } else {
@@ -1688,7 +1666,6 @@ ${note}`;
             readonly apply?: boolean;
             readonly auto?: boolean;
             readonly admin?: boolean;
-            readonly through?: string;
           },
         ) =>
           Effect.gen(function* () {

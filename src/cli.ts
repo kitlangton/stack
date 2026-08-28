@@ -401,9 +401,10 @@ if (import.meta.main) {
     .slice(2)
     .some((arg) => arg === "--help" || arg === "-h" || arg === "--version");
 
-  const app = help
-    ? runCli(process.argv.slice(2)).pipe(Effect.provide(docs))
-    : runCli(process.argv.slice(2)).pipe(Effect.provide(live));
+  const app =
+    help || process.argv[2] === "skill"
+      ? runCli(process.argv.slice(2)).pipe(Effect.provide(docs))
+      : runCli(process.argv.slice(2)).pipe(Effect.provide(live));
 
   const main = pipe(
     app,

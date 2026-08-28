@@ -70,40 +70,13 @@ export const layer = (opts: Options) =>
           yield* requireOpen(pr);
           yield* record(`edit ${pr} ${base}`);
           yield* Ref.update(pullsRef, (pulls) =>
-            pulls.map((item) =>
-              item.number === pr
-                ? pullRef({
-                    number: item.number,
-                    title: item.title,
-                    head: item.head,
-                    headRepository: item.headRepository,
-                    base,
-                    url: item.url,
-                    draft: item.draft,
-                    checks: item.checks,
-                  })
-                : item,
-            ),
+            pulls.map((item) => (item.number === pr ? pullRef({ ...item, base }) : item)),
           );
           yield* Ref.update(metasRef, (metas) => {
             const nextMetas = new Map(metas);
             const current = nextMetas.get(pr);
             if (current) {
-              nextMetas.set(
-                pr,
-                pullMeta({
-                  number: current.number,
-                  title: current.title,
-                  body: current.body,
-                  head: current.head,
-                  headRepository: current.headRepository,
-                  base,
-                  url: current.url,
-                  draft: current.draft,
-                  state: current.state,
-                  labels: current.labels,
-                }),
-              );
+              nextMetas.set(pr, pullMeta({ ...current, base }));
             }
             return nextMetas;
           });
@@ -118,21 +91,7 @@ export const layer = (opts: Options) =>
             const nextMetas = new Map(metas);
             const current = nextMetas.get(pr);
             if (current) {
-              nextMetas.set(
-                pr,
-                pullMeta({
-                  number: current.number,
-                  title: current.title,
-                  body,
-                  head: current.head,
-                  headRepository: current.headRepository,
-                  base: current.base,
-                  url: current.url,
-                  draft: current.draft,
-                  state: current.state,
-                  labels: current.labels,
-                }),
-              );
+              nextMetas.set(pr, pullMeta({ ...current, body }));
             }
             return nextMetas;
           });

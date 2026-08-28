@@ -346,6 +346,7 @@ const realStack = (opts: {
   readonly base?: ReadonlyArray<CommitSpec>;
   readonly current?: string;
   readonly state?: StackState;
+  readonly metas?: ReadonlyArray<ReturnType<typeof pullMeta>>;
 }) =>
   Effect.gen(function* () {
     const root = yield* tempDir();
@@ -400,19 +401,21 @@ const realStack = (opts: {
               draft: false,
             }),
           ),
-          metas: opts.branches.map((branch) =>
-            pullMeta({
-              number: branch.number,
-              title: branch.name,
-              body: `Stacked on ${branch.parent}.`,
-              head: branch.name,
-              base: branch.parent,
-              url: `u${branch.number}`,
-              draft: false,
-              state: "OPEN",
-              labels: [],
-            }),
-          ),
+          metas:
+            opts.metas ??
+            opts.branches.map((branch) =>
+              pullMeta({
+                number: branch.number,
+                title: branch.name,
+                body: `Stacked on ${branch.parent}.`,
+                head: branch.name,
+                base: branch.parent,
+                url: `u${branch.number}`,
+                draft: false,
+                state: "OPEN",
+                labels: [],
+              }),
+            ),
         }),
       ),
       Layer.provideMerge(
@@ -832,14 +835,21 @@ Footer
   };
 };
 
-const makeLand = (
-  dirty: ReadonlyArray<string> = [],
+const makeLand = ({
+  dirty = [],
   currentBranch = "stack-a",
-  progress: Array<Progress.ProgressEvent> | null = null,
-  codeHost: Partial<Git.Interface & CodeHost.Interface> = {},
+  progress = null,
+  codeHost = {},
   includeUnrelatedRoot = false,
   forkStackC = false,
-) => {
+}: {
+  readonly dirty?: ReadonlyArray<string>;
+  readonly currentBranch?: string;
+  readonly progress?: Array<Progress.ProgressEvent> | null;
+  readonly codeHost?: Partial<Git.Interface & CodeHost.Interface>;
+  readonly includeUnrelatedRoot?: boolean;
+  readonly forkStackC?: boolean;
+} = {}) => {
   const seen: Array<string> = [];
   const refs = new Map([
     ["dev", branchRef({ name: "dev", head: "dev-2" })],
@@ -3491,70 +3501,25 @@ describe("Stack", () => {
       pullRef({ number: 3, head: "stack-c", base: "stack-a", url: "u3", draft: false }),
     ];
     const metas = new Map(
-      pulls.map((pull) => [
-        Number(pull.number),
-        pullMeta({
-          number: pull.number,
-          title: String(pull.head),
-          body: `body ${pull.head}`,
-          head: pull.head,
-          base: pull.base,
-          url: pull.url,
-          draft: pull.draft,
-          state: "OPEN",
-          labels: [],
-        }),
+      pulls.map((pull) => [Number(pull.number), metaFor(pull, `body ${pull.head}`)]),
+    );
+    const layer = stackTestLayer({
+      refs: [ref("dev"), ref("stack-a", "a"), ref("stack-b", "b"), ref("stack-c", "c")],
+      pulls,
+      current: "stack-b",
+      state: stackState([
+        stackLink({ branch: "stack-a", parent: "dev", anchor: "dev", pr: 1 }),
+        stackLink({ branch: "stack-b", parent: "stack-a", anchor: "a", pr: 2 }),
+        stackLink({ branch: "stack-c", parent: "stack-a", anchor: "a", pr: 3 }),
       ]),
-    );
-    const layer = Stack.layer.pipe(
-      Layer.provideMerge(Progress.noop),
-      Layer.provideMerge(cfg),
-      Layer.provideMerge(
-        gitAndCodeHost({
-          dirty: () => Effect.succeed([]),
-          fetch: () => Effect.void,
-          auto: () => Effect.void,
-          merge: () => Effect.void,
-          wait: () => Effect.void,
-          refs: () =>
-            Effect.succeed([
-              branchRef({ name: "dev", head: "dev" }),
-              branchRef({ name: "stack-a", head: "a" }),
-              branchRef({ name: "stack-b", head: "b" }),
-              branchRef({ name: "stack-c", head: "c" }),
-            ]),
-          changes: () => Effect.succeed(pulls),
-          change: (pr: number) => Effect.succeed(metas.get(pr)!),
-          current: () => Effect.succeed("stack-b"),
-          switch: () => Effect.void,
-          head: () => Effect.succeed(Option.none()),
-          base: () => Effect.succeed(Option.none()),
-          commits: () => Effect.succeed([]),
-          novel: (_parent, _branch, commits) => Effect.succeed(commits),
-          replay: () => Effect.void,
-          backup: () => Effect.void,
-          drop: () => Effect.void,
-          restore: () => Effect.void,
-          push: () => Effect.void,
-          edit: () => Effect.void,
-          body: (pr: number, body: string) => Effect.sync(() => void bodies.set(pr, body)),
-          close: () => Effect.void,
-          create: () => Effect.fail(new ExecError("gh", ["pr", "create"], 1, "unused")),
-        }),
-      ),
-      Layer.provideMerge(
-        Store.memory(
-          new StackState({
-            version: 1,
-            links: [
-              stackLink({ branch: "stack-a", parent: "dev", anchor: "dev", pr: 1 }),
-              stackLink({ branch: "stack-b", parent: "stack-a", anchor: "a", pr: 2 }),
-              stackLink({ branch: "stack-c", parent: "stack-a", anchor: "a", pr: 3 }),
-            ],
-          }),
-        ),
-      ),
-    );
+      service: {
+        change: (pr: number) => Effect.succeed(metas.get(pr)!),
+        head: () => Effect.succeed(Option.none()),
+        remoteHead: () => Effect.succeed(Option.none()),
+        body: (pr: number, body: string) => Effect.sync(() => void bodies.set(pr, body)),
+        create: () => Effect.fail(new ExecError("gh", ["pr", "create"], 1, "unused")),
+      },
+    });
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -3724,8 +3689,10 @@ describe("Stack", () => {
   });
 
   it.effect("land journals child retargets before a failed root merge", () => {
-    const test = makeLand([], "stack-a", null, {
-      merge: () => Effect.fail(new ExecError("gh", ["pr", "merge", "4"], 1, "blocked")),
+    const test = makeLand({
+      codeHost: {
+        merge: () => Effect.fail(new ExecError("gh", ["pr", "merge", "4"], 1, "blocked")),
+      },
     });
 
     return Effect.gen(function* () {
@@ -3768,7 +3735,7 @@ describe("Stack", () => {
   });
 
   it.effect("land infers the root from the current stack branch", () => {
-    const test = makeLand([], "stack-c");
+    const test = makeLand({ currentBranch: "stack-c" });
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -4011,7 +3978,7 @@ describe("Stack", () => {
   });
 
   it.effect("land infers the only stack root when current branch is off-stack", () => {
-    const test = makeLand([], "dev");
+    const test = makeLand({ currentBranch: "dev" });
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -4043,16 +4010,19 @@ describe("Stack", () => {
   });
 
   it.effect("land apply releases a clean checked-out target before deleting it", () => {
-    const test = makeLand([], "dev", null, {
-      worktrees: () =>
-        Effect.succeed([
-          {
-            path: "/tmp/stack-a-worktree",
-            head: "stack-a-1",
-            branch: "stack-a",
-            dirty: [],
-          },
-        ]),
+    const test = makeLand({
+      currentBranch: "dev",
+      codeHost: {
+        worktrees: () =>
+          Effect.succeed([
+            {
+              path: "/tmp/stack-a-worktree",
+              head: "stack-a-1",
+              branch: "stack-a",
+              dirty: [],
+            },
+          ]),
+      },
     });
 
     return Effect.gen(function* () {
@@ -4068,16 +4038,19 @@ describe("Stack", () => {
   });
 
   it.effect("land auto releases a clean checked-out target before deleting it", () => {
-    const test = makeLand([], "dev", null, {
-      worktrees: () =>
-        Effect.succeed([
-          {
-            path: "/tmp/stack-a-worktree",
-            head: "stack-a-1",
-            branch: "stack-a",
-            dirty: [],
-          },
-        ]),
+    const test = makeLand({
+      currentBranch: "dev",
+      codeHost: {
+        worktrees: () =>
+          Effect.succeed([
+            {
+              path: "/tmp/stack-a-worktree",
+              head: "stack-a-1",
+              branch: "stack-a",
+              dirty: [],
+            },
+          ]),
+      },
     });
 
     return Effect.gen(function* () {
@@ -4110,7 +4083,7 @@ describe("Stack", () => {
   });
 
   it.effect("land auto through stays on the selected stack when another root exists", () => {
-    const test = makeLand([], "stack-a", null, {}, true);
+    const test = makeLand({ includeUnrelatedRoot: true });
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -4127,7 +4100,7 @@ describe("Stack", () => {
   });
 
   it.effect("land auto through follows the selected sibling branch", () => {
-    const test = makeLand([], "stack-a", null, {}, false, true);
+    const test = makeLand({ forkStackC: true });
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -4189,11 +4162,13 @@ describe("Stack", () => {
   });
 
   it.effect("land rejects GitLab admin merge before mutation", () => {
-    const test = makeLand([], "stack-a", null, {
-      provider: "gitlab",
-      capabilities: { adminMerge: false },
-      requestLabel: "MR",
-      reference: (number) => `!${number}`,
+    const test = makeLand({
+      codeHost: {
+        provider: "gitlab",
+        capabilities: { adminMerge: false },
+        requestLabel: "MR",
+        reference: (number) => `!${number}`,
+      },
     });
 
     return Effect.gen(function* () {
@@ -4207,7 +4182,7 @@ describe("Stack", () => {
 
   it.effect("land auto emits progress while waiting for merge", () => {
     const events: Array<Progress.ProgressEvent> = [];
-    const test = makeLand([], "stack-a", events);
+    const test = makeLand({ progress: events });
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -4234,80 +4209,29 @@ describe("Stack", () => {
 
   it.effect("sync rebases descendants when an older PR branch changes", () =>
     Effect.gen(function* () {
-      const root = yield* tempDir();
-      const origin = join(root, "origin.git");
-      const repo = join(root, "repo");
-
-      yield* shell(root, "git", ["init", "--bare", origin]);
-      yield* mkdirp(repo);
-      yield* shell(repo, "git", ["init", "-b", "dev"]);
-      yield* shell(repo, "git", ["config", "user.email", "stack@example.com"]);
-      yield* shell(repo, "git", ["config", "user.name", "Stack Test"]);
-      yield* shell(repo, "git", ["remote", "add", "origin", origin]);
-
-      yield* commitFile(repo, "base.txt", "base\n", "base");
-      yield* shell(repo, "git", ["push", "-u", "origin", "dev"]);
-      const dev = yield* shell(repo, "git", ["rev-parse", "dev"]);
-
-      yield* shell(repo, "git", ["checkout", "-b", "stack-b"]);
-      yield* commitFile(repo, "b.txt", "b1\n", "b1");
-      yield* shell(repo, "git", ["push", "-u", "origin", "stack-b"]);
-      const oldStackB = yield* shell(repo, "git", ["rev-parse", "stack-b"]);
-
-      yield* shell(repo, "git", ["checkout", "-b", "stack-c"]);
-      yield* commitFile(repo, "c.txt", "c\n", "c");
-      yield* shell(repo, "git", ["push", "-u", "origin", "stack-c"]);
+      const { repo, layer } = yield* realStack({
+        branches: [
+          {
+            name: "stack-b",
+            parent: "dev",
+            number: 2,
+            commits: [{ file: "b.txt", body: "b1\n", message: "b1" }],
+          },
+          {
+            name: "stack-c",
+            parent: "stack-b",
+            number: 3,
+            commits: [{ file: "c.txt", body: "c\n", message: "c" }],
+          },
+        ],
+        metas: [pr(2, "stack-b", "dev"), pr(3, "stack-c", "stack-b")].map((pull) =>
+          pullMeta({ ...metaFor(pull, ""), title: `stack: ${pull.head}` }),
+        ),
+      });
 
       yield* shell(repo, "git", ["checkout", "stack-b"]);
       yield* commitFile(repo, "b2.txt", "b2\n", "b2");
       yield* shell(repo, "git", ["push", "origin", "stack-b"]);
-
-      const cfgLayer = StackConfig.layer({ root: repo, trunks: ["dev"] }).pipe(
-        Layer.provide(NodeServices.layer),
-      );
-      const layer = Stack.layer.pipe(
-        Layer.provideMerge(Progress.noop),
-        Layer.provideMerge(NodeServices.layer),
-        Layer.provideMerge(Proc.live),
-        Layer.provideMerge(cfgLayer),
-        Layer.provideMerge(Git.live.pipe(Layer.provide(cfgLayer))),
-        Layer.provideMerge(
-          CodeHostGitHub.memory({
-            pulls: [
-              pullRef({
-                number: 2,
-                head: "stack-b",
-                base: "dev",
-                url: "u2",
-                draft: false,
-              }),
-              pullRef({
-                number: 3,
-                head: "stack-c",
-                base: "stack-b",
-                url: "u3",
-                draft: false,
-              }),
-            ],
-          }),
-        ),
-        Layer.provideMerge(
-          Store.memory(
-            new StackState({
-              version: 1,
-              links: [
-                stackLink({ branch: "stack-b", parent: "dev", anchor: dev, pr: 2 }),
-                stackLink({
-                  branch: "stack-c",
-                  parent: "stack-b",
-                  anchor: oldStackB,
-                  pr: 3,
-                }),
-              ],
-            }),
-          ),
-        ),
-      );
 
       const items = yield* Effect.gen(function* () {
         const stack = yield* Stack;
@@ -4549,116 +4473,37 @@ describe("Stack", () => {
   it.effect(
     "sync --apply does not re-push a child that is already current when its parent is repaired",
     () => {
-      const refs = new Map([
-        ["dev", branchRef({ name: "dev", head: "dev-2" })],
-        ["stack-a", branchRef({ name: "stack-a", head: "stack-a-1" })],
-        ["stack-b", branchRef({ name: "stack-b", head: "stack-b-1" })],
-      ]);
-      const pulls = [
-        pullRef({ number: 4, head: "stack-a", base: "dev", url: "u4", draft: false }),
-        pullRef({ number: 5, head: "stack-b", base: "stack-a", url: "u5", draft: false }),
-      ];
-      const bases = new Map([
-        ["stack-a:dev", "dev-1"],
-        ["stack-a:origin/dev", "dev-1"],
-        ["stack-b:stack-a", "stack-a-1"],
-      ]);
-      const metas = new Map([
-        [
-          4,
-          pullMeta({
-            number: 4,
-            title: "stack-a",
-            body: "body",
-            head: "stack-a",
-            base: "dev",
-            url: "u4",
-            draft: false,
-            state: "OPEN",
-            labels: [],
-          }),
-        ],
-        [
-          5,
-          pullMeta({
-            number: 5,
-            title: "stack-b",
-            body: "body",
-            head: "stack-b",
-            base: "stack-a",
-            url: "u5",
-            draft: false,
-            state: "OPEN",
-            labels: [],
-          }),
-        ],
-      ]);
       const seen: Array<string> = [];
 
-      const layer = Stack.layer.pipe(
-        Layer.provideMerge(Progress.noop),
-        Layer.provideMerge(NodeServices.layer),
-        Layer.provideMerge(
-          StackConfig.layer({ root: "/tmp/stack", trunks: ["dev"] }).pipe(
-            Layer.provide(NodeServices.layer),
-          ),
-        ),
-        Layer.provideMerge(
-          gitAndCodeHost({
-            dirty: () => Effect.succeed([]),
-            worktrees: () => Effect.succeed([]),
-            fetch: () => Effect.void,
-            refs: () => Effect.succeed(Array.from(refs.values())),
-            changes: () => Effect.succeed(pulls),
-            change: (pr: number) => Effect.succeed(metas.get(pr)!),
-            current: () => Effect.succeed("stack-b"),
-            head: (name: string) =>
-              Effect.succeed(
-                Option.fromNullishOr(
-                  refs.get(name)?.head ??
-                    (name.startsWith("origin/") ? refs.get(name.slice(7))?.head : undefined),
-                ),
-              ),
-            base: (branch: string, parent: string) =>
-              Effect.succeed(Option.fromNullishOr(bases.get(`${branch}:${parent}`))),
-            commits: () => Effect.succeed(["x"]),
-            novel: (_p: string, _b: string, commits: ReadonlyArray<string>) =>
-              Effect.succeed(commits),
-            backup: (branch: string, name: string) =>
-              Effect.sync(() => void seen.push(`backup ${branch} ${name}`)),
-            drop: () => Effect.void,
-            restore: () => Effect.void,
-            replay: (branch: string, parent: string) =>
-              Effect.sync(() => {
-                seen.push(`rebase ${branch} ${parent}`);
-              }),
-            push: (branch: string) => Effect.sync(() => void seen.push(`push ${branch}`)),
-            edit: (pr: number, base: string) =>
-              Effect.sync(() => void seen.push(`edit ${pr} ${base}`)),
-            body: (pr: number, body: string) =>
-              Effect.sync(() => void seen.push(`body ${pr} ${body.includes("### [Stack]")}`)),
-            close: () => Effect.void,
-            create: () =>
-              Effect.succeed(
-                pullRef({ number: 99, head: "x", base: "dev", url: "u", draft: false }),
-              ),
-            remote: () => Effect.succeed(Option.some("git@github.com:example/repo.git")),
-            remotes: () =>
-              Effect.succeed([{ name: "origin", url: "git@github.com:example/repo.git" }]),
-          }),
-        ),
-        Layer.provideMerge(
-          Store.memory(
-            new StackState({
-              version: 1,
-              links: [
-                stackLink({ branch: "stack-a", parent: "dev", anchor: "dev-1", pr: 4 }),
-                stackLink({ branch: "stack-b", parent: "stack-a", anchor: "stack-a-1", pr: 5 }),
-              ],
-            }),
-          ),
-        ),
-      );
+      const layer = stackTestLayer({
+        refs: [ref("dev", "dev-2"), ref("stack-a", "stack-a-1"), ref("stack-b", "stack-b-1")],
+        pulls: [pr(4, "stack-a", "dev"), pr(5, "stack-b", "stack-a")],
+        bases: bases(["stack-a", "dev", "dev-1"], ["stack-b", "stack-a", "stack-a-1"]),
+        current: "stack-b",
+        state: stackState([
+          stackLink({ branch: "stack-a", parent: "dev", anchor: "dev-1", pr: 4 }),
+          stackLink({ branch: "stack-b", parent: "stack-a", anchor: "stack-a-1", pr: 5 }),
+        ]),
+        service: {
+          remoteHead: () => Effect.succeed(Option.none()),
+          commits: () => Effect.succeed(["x"]),
+          backup: (branch: string, name: string) =>
+            Effect.sync(() => void seen.push(`backup ${branch} ${name}`)),
+          // Replaying the parent intentionally leaves its tip unchanged.
+          replay: (branch: string, parent: string) =>
+            Effect.sync(() => void seen.push(`rebase ${branch} ${parent}`)),
+          push: (branch: string) => Effect.sync(() => void seen.push(`push ${branch}`)),
+          edit: (pr: number, base: string) =>
+            Effect.sync(() => void seen.push(`edit ${pr} ${base}`)),
+          body: (pr: number, body: string) =>
+            Effect.sync(() => void seen.push(`body ${pr} ${body.includes("### [Stack]")}`)),
+          create: () =>
+            Effect.succeed(pullRef({ number: 99, head: "x", base: "dev", url: "u", draft: false })),
+          remote: () => Effect.succeed(Option.some("git@github.com:example/repo.git")),
+          remotes: () =>
+            Effect.succeed([{ name: "origin", url: "git@github.com:example/repo.git" }]),
+        },
+      });
 
       return Effect.gen(function* () {
         const stack = yield* Stack;
@@ -4820,7 +4665,7 @@ describe("Stack", () => {
   );
 
   it.effect("land apply refuses a dirty worktree before merging", () => {
-    const test = makeLand([" M foo.ts", "?? scratch/"]);
+    const test = makeLand({ dirty: [" M foo.ts", "?? scratch/"] });
 
     return Effect.gen(function* () {
       const stack = yield* Stack;
@@ -4838,16 +4683,19 @@ describe("Stack", () => {
   });
 
   it.effect("land apply refuses a dirty target worktree before merging the root", () => {
-    const test = makeLand([], "dev", null, {
-      worktrees: () =>
-        Effect.succeed([
-          {
-            path: "/tmp/stack-a-worktree",
-            head: "stack-a-1",
-            branch: "stack-a",
-            dirty: ["?? dirty.txt"],
-          },
-        ]),
+    const test = makeLand({
+      currentBranch: "dev",
+      codeHost: {
+        worktrees: () =>
+          Effect.succeed([
+            {
+              path: "/tmp/stack-a-worktree",
+              head: "stack-a-1",
+              branch: "stack-a",
+              dirty: ["?? dirty.txt"],
+            },
+          ]),
+      },
     });
 
     return Effect.gen(function* () {
@@ -4863,16 +4711,19 @@ describe("Stack", () => {
   });
 
   it.effect("land auto refuses a dirty target worktree before merging the root", () => {
-    const test = makeLand([], "dev", null, {
-      worktrees: () =>
-        Effect.succeed([
-          {
-            path: "/tmp/stack-a-worktree",
-            head: "stack-a-1",
-            branch: "stack-a",
-            dirty: ["?? dirty.txt"],
-          },
-        ]),
+    const test = makeLand({
+      currentBranch: "dev",
+      codeHost: {
+        worktrees: () =>
+          Effect.succeed([
+            {
+              path: "/tmp/stack-a-worktree",
+              head: "stack-a-1",
+              branch: "stack-a",
+              dirty: ["?? dirty.txt"],
+            },
+          ]),
+      },
     });
 
     return Effect.gen(function* () {
@@ -4935,132 +4786,33 @@ describe("Stack", () => {
     "land repairs descendants in a real git repository",
     () =>
       Effect.gen(function* () {
-        const root = yield* tempDir();
-        const origin = join(root, "origin.git");
-        const repo = join(root, "repo");
-        const log: Array<string> = [];
-
-        yield* shell(root, "git", ["init", "--bare", origin]);
-        yield* mkdirp(repo);
-        yield* shell(repo, "git", ["init", "-b", "dev"]);
-        yield* shell(repo, "git", ["config", "user.email", "stack@example.com"]);
-        yield* shell(repo, "git", ["config", "user.name", "Stack Test"]);
-        yield* shell(repo, "git", ["remote", "add", "origin", origin]);
-
-        yield* commitFile(repo, "base.txt", "base\n", "base");
-        yield* shell(repo, "git", ["push", "-u", "origin", "dev"]);
-        const dev = yield* shell(repo, "git", ["rev-parse", "dev"]);
-
-        yield* shell(repo, "git", ["checkout", "-b", "stack-a"]);
-        yield* commitFile(repo, "a.txt", "a\n", "a");
-        yield* shell(repo, "git", ["push", "-u", "origin", "stack-a"]);
-        const stackA = yield* shell(repo, "git", ["rev-parse", "stack-a"]);
-
-        yield* shell(repo, "git", ["checkout", "-b", "stack-b"]);
-        yield* commitFile(repo, "b.txt", "b\n", "b");
-        yield* shell(repo, "git", ["push", "-u", "origin", "stack-b"]);
-        const stackB = yield* shell(repo, "git", ["rev-parse", "stack-b"]);
-
-        yield* shell(repo, "git", ["checkout", "-b", "stack-c"]);
-        yield* commitFile(repo, "c.txt", "c\n", "c");
-        yield* shell(repo, "git", ["push", "-u", "origin", "stack-c"]);
-
-        const cfgLayer = StackConfig.layer({ root: repo, trunks: ["dev"] }).pipe(
-          Layer.provide(NodeServices.layer),
-        );
-        const layer = Stack.layer.pipe(
-          Layer.provideMerge(Progress.noop),
-          Layer.provideMerge(NodeServices.layer),
-          Layer.provideMerge(Proc.live),
-          Layer.provideMerge(cfgLayer),
-          Layer.provideMerge(Git.live.pipe(Layer.provide(cfgLayer))),
-          Layer.provideMerge(
-            integrationGitHub({
-              repo,
-              log,
-              pulls: [
-                pullRef({
-                  number: 1,
-                  head: "stack-a",
-                  base: "dev",
-                  url: "u1",
-                  draft: false,
-                }),
-                pullRef({
-                  number: 2,
-                  head: "stack-b",
-                  base: "stack-a",
-                  url: "u2",
-                  draft: false,
-                }),
-                pullRef({
-                  number: 3,
-                  head: "stack-c",
-                  base: "stack-b",
-                  url: "u3",
-                  draft: false,
-                }),
-              ],
-              metas: [
-                pullMeta({
-                  number: 1,
-                  title: "stack-a",
-                  body: "Stacked on #0.",
-                  head: "stack-a",
-                  base: "dev",
-                  url: "u1",
-                  draft: false,
-                  state: "OPEN",
-                  labels: [],
-                }),
-                pullMeta({
-                  number: 2,
-                  title: "stack-b",
-                  body: "Stacked on #1.",
-                  head: "stack-b",
-                  base: "stack-a",
-                  url: "u2",
-                  draft: false,
-                  state: "OPEN",
-                  labels: [],
-                }),
-                pullMeta({
-                  number: 3,
-                  title: "stack-c",
-                  body: "Stacked on #2.",
-                  head: "stack-c",
-                  base: "stack-b",
-                  url: "u3",
-                  draft: false,
-                  state: "OPEN",
-                  labels: [],
-                }),
-              ],
-            }),
-          ),
-          Layer.provideMerge(
-            Store.memory(
-              new StackState({
-                version: 1,
-                links: [
-                  stackLink({ branch: "stack-a", parent: "dev", anchor: dev, pr: 1 }),
-                  stackLink({
-                    branch: "stack-b",
-                    parent: "stack-a",
-                    anchor: stackA,
-                    pr: 2,
-                  }),
-                  stackLink({
-                    branch: "stack-c",
-                    parent: "stack-b",
-                    anchor: stackB,
-                    pr: 3,
-                  }),
-                ],
-              }),
-            ),
-          ),
-        );
+        const { repo, log, layer } = yield* realStack({
+          branches: [
+            {
+              name: "stack-a",
+              parent: "dev",
+              number: 1,
+              commits: [{ file: "a.txt", body: "a\n", message: "a" }],
+            },
+            {
+              name: "stack-b",
+              parent: "stack-a",
+              number: 2,
+              commits: [{ file: "b.txt", body: "b\n", message: "b" }],
+            },
+            {
+              name: "stack-c",
+              parent: "stack-b",
+              number: 3,
+              commits: [{ file: "c.txt", body: "c\n", message: "c" }],
+            },
+          ],
+          metas: [
+            metaFor(pr(1, "stack-a", "dev"), "Stacked on #0."),
+            metaFor(pr(2, "stack-b", "stack-a"), "Stacked on #1."),
+            metaFor(pr(3, "stack-c", "stack-b"), "Stacked on #2."),
+          ],
+        });
 
         const result = yield* Effect.gen(function* () {
           const stack = yield* Stack;
